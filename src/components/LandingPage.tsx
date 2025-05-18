@@ -1,5 +1,6 @@
 import React from "react";
-import Header from "../components/Header";
+import Header from "./Header";
+import { Link } from "react-router-dom";
 
 const LandingPage = () => {
   return (
@@ -12,12 +13,11 @@ const LandingPage = () => {
           Upload your WhatsApp chats and let ThreadScribe convert them into clean, readable threads.
         </p>
 
-        <a
-          href="/upload"
+        <Link to="/upload"
           className="inline-block bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-300"
         >
-          Upload Your Chat
-        </a>
+          Upload WhatsApp Chat
+        </Link>
       </section>
 
       <section className="bg-white py-16 px-6">
