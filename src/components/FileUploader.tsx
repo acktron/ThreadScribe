@@ -5,12 +5,20 @@ interface FileUploaderProps {
 }
 
 const FileUploader: React.FC<FileUploaderProps> = ({ onUpload }) => {
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     if (file.type !== "text/plain") {
       alert("Only .txt files are allowed");
+      e.target.value = ""; // reset input
+      return;
+    }
+
+    const maxSizeMB = 5;
+    if (file.size > maxSizeMB * 1024 * 1024) {
+      alert(`File size must be less than ${maxSizeMB} MB`);
+      e.target.value = ""; // reset input
       return;
     }
 
@@ -21,6 +29,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({ onUpload }) => {
     };
     reader.readAsText(file);
   };
+
 
   return (
     <div className="mb-4">
