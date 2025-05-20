@@ -1,23 +1,26 @@
 import React, { useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import ConversationBlock from "./ConversationBlock";
+import { jsPDF } from "jspdf";
+import html2canvas from "html2canvas";
 
 const ResultPage = () => {
   const location = useLocation();
   const rawContent = (location.state && location.state.rawContent) || "";
 
-  const parsedData = useMemo(() => {
-    if (!rawContent) return [];
+  const handleCopy = () => {
+    navigator.clipboard.writeText(rawContent).then(() => {
+      alert("Copied to clipboard!");
+    }).catch(() => {
+      alert("Failed to copy.");
+    });
+  };
 
-    const blocks = rawContent.split(/\n\s*\n/);
-
-    return blocks.map((blockText: string, i: any) => ({
-      summary: blockText.slice(0, 100) + (blockText.length > 100 ? "..." : ""),
-      tasks: ["Task 1 example", "Task 2 example"],
-      decisions: ["Decision 1 example", "Decision 2 example"],
-      questions: ["Question 1 example?", "Question 2 example?"],
-    }));
-  }, [rawContent]);
+  const handleDownloadPDF = () => {
+    const doc = new jsPDF();
+    const lines = doc.splitTextToSize(rawContent, 180); // wrap text
+    doc.text(lines, 10, 10);
+    doc.save("chat-summary.pdf");
+  };
 
   if (!rawContent) {
     return <div className="text-center py-20">No results to show.</div>;
@@ -25,19 +28,25 @@ const ResultPage = () => {
 
   return (
     <div className="min-h-screen bg-gray-100 px-4 py-8">
-      <h1 className="text-3xl font-bold text-center mb-8">🧠 Summary Dashboard</h1>
+      <h1 className="text-3xl font-bold text-center mb-6">📄 Raw Chat Content</h1>
 
-      <div className="space-y-6 max-w-4xl mx-auto">
-        {parsedData.map((block: { summary: string; tasks: string[]; decisions: string[]; questions: string[]; }, index: number) => (
-          <ConversationBlock
-            key={index}
-            blockTitle={`Block ${index + 1}`}
-            summary={block.summary}
-            checklist={block.tasks}
-            decisions={block.decisions}
-            questions={block.questions}
-          />
-        ))}
+      <div className="flex justify-center gap-4 mb-6">
+        <button
+          onClick={handleCopy}
+          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+        >
+          Copy to Clipboard
+        </button>
+        <button
+          onClick={handleDownloadPDF}
+          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition"
+        >
+          Download as PDF
+        </button>
+      </div>
+
+      <div className="bg-white p-6 rounded-xl shadow-md max-w-4xl mx-auto whitespace-pre-wrap overflow-x-auto">
+        {rawContent}
       </div>
     </div>
   );
