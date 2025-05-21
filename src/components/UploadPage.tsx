@@ -34,11 +34,12 @@ const UploadPage = () => {
       console.log("API Response:", result);
 
       // Pass raw content to ResultPage
-      if (result.content) {
-        navigate("/results", { state: { rawContent: result.content } });
-      } else {
+      if (result.summary) {
+        navigate("/results", { state: { summary: result.summary } });
+      }else {
         alert("Invalid response from server.");
       }
+
     } catch (error) {
       console.error("Upload error:", error);
       alert("Failed to process chat. Try again.");
