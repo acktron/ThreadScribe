@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import re
@@ -20,10 +20,10 @@ app.add_middleware(
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
 
+# In-memory store for last uploaded chat (basic temp cache)
+chat_context_storage = {"full_text": ""}
+
 def parse_chat(text):
-    """
-    Parses WhatsApp chat text into structured messages.
-    """
     message_pattern = re.compile(r"^(\d{1,2}/\d{1,2}/\d{2,4}), (\d{1,2}:\d{2} [APMapm]{2}) - (.*?): (.*)$")
     messages = []
     current_msg = None
@@ -33,13 +33,11 @@ def parse_chat(text):
         if match:
             if current_msg:
                 messages.append(current_msg)
-
             date_str = match.group(1)
             time_str = match.group(2)
             sender = match.group(3)
             message = match.group(4)
 
-            # Combine date and time
             try:
                 timestamp = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%y %I:%M %p")
             except ValueError:
@@ -54,7 +52,6 @@ def parse_chat(text):
                 "message": message
             }
         else:
-            # Continuation of previous message
             if current_msg:
                 current_msg["message"] += "\n" + line
 
@@ -64,10 +61,6 @@ def parse_chat(text):
     return messages
 
 def chunk_messages(messages, max_tokens=450):
-    """
-    Break messages into chunks of messages that fit within max token length.
-    Approximate by character length for simplicity.
-    """
     chunks = []
     current_chunk = []
     current_len = 0
@@ -76,7 +69,7 @@ def chunk_messages(messages, max_tokens=450):
         msg_text = f"{msg['sender']}: {msg['message']}\n"
         msg_len = len(msg_text)
 
-        if current_len + msg_len > max_tokens * 4:  # Rough char to token approx (4 chars/token)
+        if current_len + msg_len > max_tokens * 4:
             chunks.append("".join(current_chunk))
             current_chunk = [msg_text]
             current_len = msg_len
@@ -89,9 +82,6 @@ def chunk_messages(messages, max_tokens=450):
     return chunks
 
 def summarize_text(text, max_length=150):
-    """
-    Summarizes text using local flan-t5-large model.
-    """
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
     outputs = model.generate(
         **inputs,
@@ -107,19 +97,34 @@ async def parse_and_summarize(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         text = contents.decode("utf-8")
-
-        # Step 1: Parse
         messages = parse_chat(text)
-
-        # Step 2: Chunk (still keeping it in case needed)
         chunks = chunk_messages(messages)
-
-        # Step 3: Summarize (but we assume only one chunk)
         full_text = chunks[0] if chunks else ""
         summary = summarize_text(full_text)
 
-        return JSONResponse(content={"summary": summary})
+        # Store for chat context
+        chat_context_storage["full_text"] = full_text
 
+        return JSONResponse(content={"summary": summary})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.post("/api/chat")
+async def chat_with_context(query: str = Form(...)):
+    try:
+        context = chat_context_storage.get("full_text", "")
+        if not context:
+            return JSONResponse(status_code=400, content={"error": "No chat context available."})
+
+        prompt = f"Chat:\n{context}\n\nQuestion: {query}\nAnswer:"
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+        outputs = model.generate(
+            **inputs,
+            max_length=150,
+            num_beams=4,
+            early_stopping=True,
+        )
+        answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        return JSONResponse(content={"answer": answer})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
