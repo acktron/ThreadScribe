@@ -10,14 +10,23 @@ const LandingPage = () => {
       <section className="text-center py-20 px-6">
         <h2 className="text-4xl font-bold mb-4">Welcome to ThreadScribe 👋</h2>
         <p className="text-lg mb-8 max-w-2xl mx-auto">
-          Upload your WhatsApp chats and let ThreadScribe convert them into clean, readable threads.
+          Upload your WhatsApp chats or connect live and let ThreadScribe convert them into clean, readable threads.
         </p>
 
-        <Link to="/upload"
-          className="inline-block bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-300"
-        >
-          Upload WhatsApp Chat
-        </Link>
+        <div className="flex justify-center space-x-4">
+          <Link
+            to="/upload"
+            className="bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-300"
+          >
+            Upload WhatsApp Chat
+          </Link>
+          <Link
+            to="/live-chat"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-300"
+          >
+            Connect Live Chat
+          </Link>
+        </div>
       </section>
 
       <section className="bg-white py-16 px-6">
@@ -25,8 +34,8 @@ const LandingPage = () => {
         <div className="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
           {[
             {
-              title: "1. Upload Chat",
-              desc: "Select and upload your WhatsApp chat (.txt) file.",
+              title: "1. Choose Mode",
+              desc: "Upload a chat file or connect your WhatsApp live.",
             },
             {
               title: "2. Let AI Process",
