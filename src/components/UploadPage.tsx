@@ -80,58 +80,68 @@ const UploadPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 px-4 py-8">
-      <div className="max-w-3xl mx-auto bg-white p-6 rounded-xl shadow-md">
-        <h1 className="text-2xl font-bold mb-4">Upload WhatsApp Chat</h1>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-white flex flex-col items-center justify-center px-6 py-12">
+      <h1 className="text-4xl font-bold mb-6 text-teal-600 drop-shadow-sm">
+        Upload WhatsApp Chat
+      </h1>
 
+      <div className="w-full max-w-3xl bg-white p-8 rounded-2xl shadow-xl">
         <FileUploader onUpload={handleFileUpload} />
 
         <div className="mt-6">
-          <label className="block font-medium mb-2">Or paste raw chat text:</label>
+          <label className="block text-lg font-medium mb-2 text-gray-700">
+            Or paste raw chat text:
+          </label>
           <textarea
             value={chatText}
             onChange={(e) => setChatText(e.target.value)}
             placeholder="Paste your WhatsApp chat text here..."
-            className="w-full p-4 border border-gray-300 rounded-md min-h-[180px] resize-y"
+            className="w-full p-4 border border-gray-300 rounded-lg min-h-[180px] resize-y focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
           />
         </div>
 
         <button
           onClick={handleSubmit}
           disabled={isLoading}
-          className={`mt-6 w-full py-3 rounded-md text-white transition ${
-            isLoading ? "bg-gray-400 cursor-not-allowed" : "bg-teal-600 hover:bg-teal-700"
+          className={`mt-6 w-full py-3 rounded-lg text-white font-semibold transition ${
+            isLoading
+              ? "bg-teal-400 cursor-not-allowed"
+              : "bg-teal-600 hover:bg-teal-700"
           }`}
         >
           {isLoading ? <LoadingSpinner /> : "Submit & Process"}
         </button>
 
-        <hr className="my-6" />
+        <hr className="my-8" />
 
         <div className="mt-4">
-          <label className="block font-medium mb-2">Ask a follow-up question:</label>
+          <label className="block text-lg font-medium mb-2 text-gray-700">
+            Ask a follow-up question:
+          </label>
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="e.g., What were the key decisions made?"
-            className="w-full p-3 border border-gray-300 rounded-md"
+            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
           />
 
           <button
             onClick={handleQuery}
             disabled={isLoading}
-            className={`mt-4 w-full py-3 rounded-md text-white transition ${
-              isLoading ? "bg-gray-400 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-700"
+            className={`mt-4 w-full py-3 rounded-lg text-white font-semibold transition ${
+              isLoading
+                ? "bg-indigo-400 cursor-not-allowed"
+                : "bg-indigo-600 hover:bg-indigo-700"
             }`}
           >
             {isLoading ? <LoadingSpinner /> : "Ask"}
           </button>
 
           {response && (
-            <div className="mt-4 bg-gray-50 p-4 border border-gray-200 rounded-md">
+            <div className="mt-6 bg-gray-50 p-4 border border-gray-200 rounded-lg">
               <h3 className="font-semibold mb-2">Response:</h3>
-              <p>{response}</p>
+              <p className="text-gray-700 whitespace-pre-line">{response}</p>
             </div>
           )}
         </div>
