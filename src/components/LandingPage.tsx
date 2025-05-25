@@ -13,7 +13,7 @@ const LandingPage = () => {
           Upload your WhatsApp chats or connect live and let ThreadScribe convert them into clean, readable threads.
         </p>
 
-        <div className="flex justify-center space-x-4">
+        <div className="flex justify-center space-x-4 flex-wrap">
           <Link
             to="/upload"
             className="bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-300"
@@ -26,6 +26,12 @@ const LandingPage = () => {
           >
             Connect Live Chat
           </Link>
+          <Link
+            to="/qr-chat"
+            className="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-300"
+          >
+            WhatsApp QR + Chat UI
+          </Link>
         </div>
       </section>
 
@@ -35,7 +41,7 @@ const LandingPage = () => {
           {[
             {
               title: "1. Choose Mode",
-              desc: "Upload a chat file or connect your WhatsApp live.",
+              desc: "Upload a chat file, connect live, or use the QR + UI.",
             },
             {
               title: "2. Let AI Process",
