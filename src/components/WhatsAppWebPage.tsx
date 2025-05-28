@@ -1,6 +1,22 @@
 import React, { useEffect, useState, useRef } from "react";
-import QRCode from "react-qr-code";
 import axios from "axios";
+import QRCodeStyling from "qr-code-styling";
+
+interface APIMessage {
+  key: {
+    remoteJid: string;
+    fromMe: boolean;
+    id: string;
+  };
+  message: {
+    conversation?: string;
+    extendedTextMessage?: {
+      text: string;
+    };
+  };
+  messageTimestamp: number;
+  status?: 'sent' | 'delivered' | 'read';
+}
 
 interface Message {
   id: string;
@@ -8,6 +24,7 @@ interface Message {
   timestamp: number;
   text: string;
   status?: 'sent' | 'delivered' | 'read';
+  remoteJid?: string;
 }
 
 interface Chat {
@@ -22,6 +39,21 @@ interface Chat {
 
 interface ChatHistory {
   [jid: string]: Message[];
+}
+
+// QR Code styling options type
+interface QROptions {
+  width: number;
+  height: number;
+  type: string;
+  data: string;
+  dotsOptions: {
+    color: string;
+    type: string;
+  };
+  backgroundOptions: {
+    color: string;
+  };
 }
 
 const WhatsAppWebPage = () => {
@@ -39,6 +71,88 @@ const WhatsAppWebPage = () => {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const lastScrollPositionRef = useRef(0);
   const previousMessagesLengthRef = useRef(0);
+  const qrRef = useRef<HTMLDivElement>(null);
+  const qrCode = useRef<QRCodeStyling | null>(null);
+
+  // Initialize QR code instance
+  useEffect(() => {
+    const qrOptions: QROptions = {
+      width: 264,
+      height: 264,
+      type: "canvas",
+      data: "Initializing...",
+      dotsOptions: {
+        color: "#000000",
+        type: "square"
+      },
+      backgroundOptions: {
+        color: "#ffffff"
+      }
+    };
+    
+    qrCode.current = new QRCodeStyling(qrOptions);
+  }, []);
+
+  // Update QR code when qr state changes
+  useEffect(() => {
+    if (qr && qrCode.current && qrRef.current) {
+      // Clear previous QR code
+      while (qrRef.current.firstChild) {
+        qrRef.current.removeChild(qrRef.current.firstChild);
+      }
+      
+      // Update and append new QR code
+      qrCode.current.update({
+        data: qr
+      });
+      qrCode.current.append(qrRef.current);
+    }
+  }, [qr]);
+
+  // Step 1: Fetch QR and start polling for status
+  useEffect(() => {
+    const fetchQR = async () => {
+      try {
+        const res = await axios.get("http://localhost:8080/api/qr");
+        if (res.data.qr) {
+          setQr(res.data.qr);
+        }
+      } catch (error) {
+        console.error("Failed to fetch QR:", error);
+      }
+    };
+
+    const checkStatus = async () => {
+      try {
+        const res = await axios.get("http://localhost:8080/api/status");
+        if (res.data.connected === true) {
+          setConnected(true);
+          setQr(null); // Clear QR when connected
+        } else {
+          setConnected(false);
+          // Fetch QR if not connected
+          fetchQR();
+        }
+      } catch (error) {
+        console.error("Failed to check status:", error);
+        setConnected(false);
+        // Try to fetch QR on status check failure
+        fetchQR();
+      }
+    };
+
+    // Initial status check and QR fetch
+    checkStatus();
+
+    // Set up polling intervals with shorter times for more responsive updates
+    const statusInterval = setInterval(checkStatus, 2000); // Check status every 2 seconds
+    const qrInterval = setInterval(fetchQR, 10000); // Refresh QR every 10 seconds
+
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(qrInterval);
+    };
+  }, []);
 
   const scrollToBottom = () => {
     if (messagesContainerRef.current && autoScroll) {
@@ -86,97 +200,52 @@ const WhatsAppWebPage = () => {
     }
   }, [chatHistory]);
 
-  // Step 1: Fetch QR and start polling for status
-  useEffect(() => {
-    const fetchQR = async () => {
-      try {
-        const res = await axios.get("http://localhost:8080/api/qr");
-        console.log("QR code response:", res.data);
-        if (res.data.qr) {
-          // Remove any "data:image/" prefix if present as QRCode component expects raw string
-          const qrData = res.data.qr.replace(/^data:image\/[a-z]+;base64,/, '');
-          console.log("Setting QR code data:", qrData.substring(0, 100) + "..."); // Log first 100 chars
-          setQr(qrData);
-        }
-      } catch (error) {
-        console.error("Failed to fetch QR:", error);
+  // Format timestamp for chat list
+  const formatTimestamp = (timestamp: string | Date): string => {
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) {
+        return '';
       }
-    };
-
-    const checkStatus = async () => {
-      try {
-        const res = await axios.get("http://localhost:8080/api/status");
-        console.log("Connection status:", res.data);
-        if (res.data.connected === true) {
-          setConnected(true);
-          setQr(null); // Clear QR when connected
-        } else {
-          setConnected(false);
-          // Fetch QR if not connected
-          fetchQR();
-        }
-      } catch (error) {
-        console.error("Failed to check status:", error);
-        setConnected(false);
-        // Try to fetch QR on status check failure
-        fetchQR();
+      
+      const now = new Date();
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      // If timestamp is today
+      if (date.toDateString() === now.toDateString()) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       }
-    };
-
-    // Initial status check and QR fetch
-    checkStatus();
-
-    // Set up polling intervals
-    const statusInterval = setInterval(checkStatus, 3000);
-    const qrInterval = setInterval(fetchQR, 20000); // Refresh QR every 20 seconds if not connected
-
-    return () => {
-      clearInterval(statusInterval);
-      clearInterval(qrInterval);
-    };
-  }, []);
-
-  // Step 2: Once connected, load chat list and merge with history
-  useEffect(() => {
-    if (connected) {
-      const fetchChats = async () => {
-        try {
-          console.log("Fetching chats...");
-          const res = await axios.get("http://localhost:8080/api/chats");
-          console.log("Received chats response:", res.data);
-          
-          const formattedChats = Object.entries(res.data).map(([jid, timestamp]) => {
-            console.log("Processing chat:", { jid, timestamp });
-            const existingMessages = chatHistory[jid] || [];
-            const lastMessage = existingMessages[existingMessages.length - 1];
-            
-            return {
-              jid,
-              name: formatJID(jid),
-              timestamp: new Date(timestamp as string).toLocaleString(),
-              timestampDate: new Date(timestamp as string),
-              unreadCount: 0,
-              messages: existingMessages,
-              lastMessage: lastMessage?.text
-            };
-          }).sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
-          console.log("Formatted chats:", formattedChats);
-          setChats(formattedChats);
-        } catch (error) {
-          console.error("Failed to fetch chats:", error);
-        }
-      };
-
-      // Initial fetch
-      fetchChats();
-
-      // Set up polling every 3 seconds
-      const pollInterval = setInterval(fetchChats, 3000);
-
-      // Cleanup
-      return () => clearInterval(pollInterval);
+      
+      // If timestamp is yesterday
+      if (date.toDateString() === yesterday.toDateString()) {
+        return 'Yesterday';
+      }
+      
+      // If timestamp is this year
+      if (date.getFullYear() === now.getFullYear()) {
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      }
+      
+      // If timestamp is before this year
+      return date.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+    } catch (error) {
+      console.error('Error formatting timestamp:', error);
+      return '';
     }
-  }, [connected, chatHistory]);
+  };
+
+  // Convert WhatsApp message format to our format
+  const convertMessage = (apiMsg: APIMessage): Message => {
+    return {
+      id: apiMsg.key.id,
+      fromMe: apiMsg.key.fromMe,
+      timestamp: apiMsg.messageTimestamp * 1000, // Convert to milliseconds
+      text: apiMsg.message.conversation || apiMsg.message.extendedTextMessage?.text || '',
+      status: apiMsg.status || 'delivered',
+      remoteJid: apiMsg.key.remoteJid
+    };
+  };
 
   // Update message fetching with scroll position preservation
   useEffect(() => {
@@ -294,10 +363,50 @@ const WhatsAppWebPage = () => {
       // Set up polling every 2 seconds
       const pollInterval = setInterval(fetchMessages, 2000);
 
-      // Cleanup
       return () => clearInterval(pollInterval);
     }
   }, [selectedChat, connected]);
+
+  // Update chat list fetching
+  useEffect(() => {
+    if (connected) {
+      const fetchChats = async () => {
+        try {
+          console.log("Fetching chats...");
+          const res = await axios.get("http://localhost:8080/api/chats");
+          console.log("Received chats response:", res.data);
+          
+          const formattedChats = Object.entries(res.data).map(([jid, timestamp]) => {
+            console.log("Processing chat:", { jid, timestamp });
+            const existingMessages = chatHistory[jid] || [];
+            const lastMessage = existingMessages[existingMessages.length - 1];
+            
+            return {
+              jid,
+              name: formatJID(jid),
+              timestamp: new Date(timestamp as string).toLocaleString(),
+              timestampDate: new Date(timestamp as string),
+              unreadCount: 0,
+              messages: existingMessages,
+              lastMessage: lastMessage?.text
+            };
+          }).sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
+          console.log("Formatted chats:", formattedChats);
+          setChats(formattedChats);
+        } catch (error) {
+          console.error("Failed to fetch chats:", error);
+        }
+      };
+
+      // Initial fetch
+      fetchChats();
+
+      // Set up polling every 3 seconds
+      const pollInterval = setInterval(fetchChats, 3000);
+
+      return () => clearInterval(pollInterval);
+    }
+  }, [connected, chatHistory]);
 
   const formatJID = (jid: string): string => {
     // Remove @s.whatsapp.net and format phone number
@@ -310,65 +419,50 @@ const WhatsAppWebPage = () => {
       return;
     }
     
+    const messageText = newMsg.trim();
+    const newMessage: Message = {
+      id: `${Date.now()}-${Math.random()}`,
+      fromMe: true,
+      timestamp: Date.now(),
+      text: messageText,
+      status: 'sent',
+      remoteJid: selectedChat
+    };
+    
     try {
-      // Format the phone number by removing any special characters and the @s.whatsapp.net suffix
       const recipient = selectedChat.split('@')[0].replace(/[^0-9]/g, "");
-      const messageText = newMsg.trim();
       
-      console.log("Attempting to send message:", {
-        recipient,
-        message: messageText,
-        originalJid: selectedChat
-      });
-
-      // Create new message object before sending
-      const newMessage: Message = {
-        id: `${Date.now()}-${Math.random()}`,
-        fromMe: true,
-        timestamp: Date.now(),
-        text: messageText,
-        status: 'sent'
-      };
-
       // Clear input immediately
       setNewMsg("");
 
-      // Add message to UI immediately
-      setMessages(prev => {
-        const updatedMessages = [...prev, newMessage]; // Add new message at the end
-        console.log("Updated messages state:", updatedMessages);
-        return updatedMessages;
-      });
-      
-      // Update chat history
-      setChatHistory(prev => {
-        const updatedHistory = {
-          ...prev,
-          [selectedChat]: [...(prev[selectedChat] || []), newMessage] // Add new message at the end
-        };
-        console.log("Updated chat history:", updatedHistory);
-        return updatedHistory;
-      });
+      // Optimistically add message to UI and chat history
+      setMessages(prev => [...prev, newMessage]);
+      setChatHistory(prev => ({
+        ...prev,
+        [selectedChat]: [...(prev[selectedChat] || []), newMessage]
+      }));
 
-      // Update chat list with latest message
-      setChats(prevChats => {
-        const updatedChats = prevChats.map(chat => {
-          if (chat.jid === selectedChat) {
-            return {
-              ...chat,
-              lastMessage: messageText,
-              timestamp: new Date().toLocaleString(),
-              timestampDate: new Date()
-            };
-          }
-          return chat;
-        }).sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
-        console.log("Updated chats list:", updatedChats);
-        return updatedChats;
-      });
+      // Update chat list
+      setChats(prevChats => 
+        prevChats.map(chat => 
+          chat.jid === selectedChat 
+            ? {
+                ...chat,
+                lastMessage: messageText,
+                timestamp: formatTimestamp(new Date()),
+                timestampDate: new Date(),
+                messages: [...chat.messages, newMessage]
+              }
+            : chat
+        ).sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime())
+      );
 
-      // Scroll to bottom
-      scrollToBottom();
+      // Force scroll to bottom after adding new message
+      requestAnimationFrame(() => {
+        if (messagesContainerRef.current) {
+          messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+        }
+      });
       
       // Send message to API
       const response = await axios.post("http://localhost:8080/api/send", {
@@ -376,37 +470,40 @@ const WhatsAppWebPage = () => {
         message: messageText
       });
 
-      console.log("Send message response:", response.data);
-
       if (!response.data.success) {
-        // If sending failed, remove the message from UI
-        setMessages(prev => prev.filter(msg => msg.id !== newMessage.id));
-        setChatHistory(prev => ({
-          ...prev,
-          [selectedChat]: prev[selectedChat].filter(msg => msg.id !== newMessage.id)
-        }));
         throw new Error(response.data.message || "Failed to send message");
       }
 
       // Update message status to delivered
-      setMessages(prev => {
-        const updatedMessages = prev.map(msg => 
-          msg.id === newMessage.id ? { ...msg, status: 'delivered' as const } : msg
-        );
-        console.log("Updated message status:", updatedMessages);
-        return updatedMessages;
-      });
+      setMessages(prev => 
+        prev.map(msg => 
+          msg.id === newMessage.id 
+            ? { ...msg, status: 'delivered' } 
+            : msg
+        )
+      );
+
+      // Update chat history with delivered status
+      setChatHistory(prev => ({
+        ...prev,
+        [selectedChat]: prev[selectedChat].map(msg =>
+          msg.id === newMessage.id
+            ? { ...msg, status: 'delivered' }
+            : msg
+        )
+      }));
 
     } catch (error: any) {
-      console.error("Failed to send message:", {
-        error,
-        errorMessage: error.message,
-        errorResponse: error.response?.data
-      });
-      
-      // Show more detailed error message to user
+      console.error("Failed to send message:", error);
       const errorMessage = error.response?.data?.message || error.message || "Failed to send message";
       alert(`Error: ${errorMessage}. Please try again.`);
+      
+      // Remove failed message from UI and history
+      setMessages(prev => prev.filter(msg => msg.id !== newMessage.id));
+      setChatHistory(prev => ({
+        ...prev,
+        [selectedChat]: prev[selectedChat].filter(msg => msg.id !== newMessage.id)
+      }));
     }
   };
 
@@ -461,7 +558,7 @@ const WhatsAppWebPage = () => {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between">
                       <span className="text-gray-800 font-medium truncate">{chat.name}</span>
-                      <span className="text-xs text-gray-500">{chat.timestamp}</span>
+                      <span className="text-xs text-gray-500">{chat.timestamp || ''}</span>
                     </div>
                     {chat.lastMessage && (
                       <p className="text-gray-600 text-sm truncate">{chat.lastMessage}</p>
@@ -485,19 +582,8 @@ const WhatsAppWebPage = () => {
                 <li>Tap Menu or Settings and select WhatsApp Web</li>
                 <li>Point your phone to this screen to capture the QR code</li>
               </ol>
-              {qr ? (
-                <div className="flex justify-center">
-                  <img 
-                    src={`data:image/png;base64,${qr}`} 
-                    alt="WhatsApp QR Code"
-                    className="w-[264px] h-[264px]"
-                  />
-                </div>
-              ) : (
-                <div className="flex justify-center items-center h-32">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-600"></div>
-                </div>
-              )}
+              <div ref={qrRef} className="inline-block bg-white p-4 rounded-lg shadow-lg"></div>
+              {qr && <div className="mt-2 text-sm text-gray-500">QR Code Length: {qr.length}</div>}
             </div>
           </div>
         ) : selectedChat ? (
@@ -533,7 +619,9 @@ const WhatsAppWebPage = () => {
                           msg.fromMe ? "bg-[#d9fdd3]" : "bg-white"
                         }`}
                       >
-                        <p className="text-gray-800">{msg.text}</p>
+                        <p className="text-gray-800 whitespace-pre-wrap break-words">
+                          {msg.text}
+                        </p>
                         <div className="flex items-center justify-end gap-1 mt-1">
                           <p className="text-gray-500 text-xs">
                             {new Date(msg.timestamp).toLocaleTimeString([], {
