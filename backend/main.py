@@ -157,7 +157,10 @@ async def proxy_send_message(request: Request):
 async def get_mcp_qr():
     try:
         async with httpx.AsyncClient() as client:
+            print(f"Attempting to fetch QR code from {MCP_BASE_URL}/api/qr")
             res = await client.get(f"{MCP_BASE_URL}/api/qr")
+            print(f"QR Response status: {res.status_code}")
+            print(f"QR Response content: {res.text}")
             res.raise_for_status()
             data = res.json()
             qr_code = data.get("qr")
@@ -165,17 +168,28 @@ async def get_mcp_qr():
                 return JSONResponse(status_code=404, content={"error": "QR code not found"})
             return {"qr": qr_code}
     except httpx.HTTPError as e:
+        print(f"HTTP Error in get_mcp_qr: {str(e)}")
         return JSONResponse(status_code=500, content={"error": f"Failed to fetch QR code: {str(e)}"})
+    except Exception as e:
+        print(f"Unexpected error in get_mcp_qr: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": f"Unexpected error: {str(e)}"})
 
 @app.get("/api/mcp/status")
 async def get_mcp_status():
     try:
         async with httpx.AsyncClient() as client:
+            print(f"Attempting to fetch status from {MCP_BASE_URL}/api/status")
             res = await client.get(f"{MCP_BASE_URL}/api/status")
+            print(f"Status Response status: {res.status_code}")
+            print(f"Status Response content: {res.text}")
             res.raise_for_status()
             return JSONResponse(status_code=res.status_code, content=res.json())
     except httpx.HTTPError as e:
+        print(f"HTTP Error in get_mcp_status: {str(e)}")
         return JSONResponse(status_code=500, content={"error": f"Failed to fetch status: {str(e)}"})
+    except Exception as e:
+        print(f"Unexpected error in get_mcp_status: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": f"Unexpected error: {str(e)}"})
 
 @app.post("/api/mcp/logout")
 async def logout_mcp():
@@ -186,3 +200,30 @@ async def logout_mcp():
             return JSONResponse(status_code=res.status_code, content=res.json())
     except httpx.HTTPError as e:
         return JSONResponse(status_code=500, content={"error": f"Logout failed: {str(e)}"})
+
+@app.get("/api/mcp/chats")
+async def get_mcp_chats():
+    try:
+        async with httpx.AsyncClient() as client:
+            print(f"Attempting to fetch chats from {MCP_BASE_URL}/api/chats")
+            res = await client.get(f"{MCP_BASE_URL}/api/chats")
+            print(f"Chats Response status: {res.status_code}")
+            print(f"Chats Response content: {res.text}")
+            res.raise_for_status()
+            return JSONResponse(status_code=res.status_code, content=res.json())
+    except httpx.HTTPError as e:
+        print(f"HTTP Error in get_mcp_chats: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": f"Failed to fetch chats: {str(e)}"})
+    except Exception as e:
+        print(f"Unexpected error in get_mcp_chats: {str(e)}")
+        return JSONResponse(status_code=500, content={"error": f"Unexpected error: {str(e)}"})
+
+@app.get("/api/mcp/messages")
+async def get_mcp_messages(chatId: str):
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{MCP_BASE_URL}/api/messages", params={"chatId": chatId})
+            res.raise_for_status()
+            return JSONResponse(status_code=res.status_code, content=res.json())
+    except httpx.HTTPError as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to fetch messages: {str(e)}"})
