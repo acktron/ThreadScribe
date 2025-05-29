@@ -56,6 +56,11 @@ interface QROptions {
   };
 }
 
+interface ChatData {
+  name?: string;
+  timestamp: string;
+}
+
 const WhatsAppWebPage = () => {
   const [qr, setQr] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -113,28 +118,34 @@ const WhatsAppWebPage = () => {
   useEffect(() => {
     const fetchQR = async () => {
       try {
-        const res = await axios.get("http://localhost:8080/api/qr");
+        console.log("Attempting to fetch QR code...");
+        const res = await axios.get("http://localhost:8000/api/mcp/qr");
+        console.log("QR code response:", res.data);
         if (res.data.qr) {
           setQr(res.data.qr);
         }
-      } catch (error) {
-        console.error("Failed to fetch QR:", error);
+      } catch (error: any) {
+        console.error("Failed to fetch QR:", error.response?.data || error);
       }
     };
 
     const checkStatus = async () => {
       try {
-        const res = await axios.get("http://localhost:8080/api/status");
+        console.log("Checking connection status...");
+        const res = await axios.get("http://localhost:8000/api/mcp/status");
+        console.log("Status response:", res.data);
         if (res.data.connected === true) {
           setConnected(true);
           setQr(null); // Clear QR when connected
+          console.log("WhatsApp client connected!");
         } else {
+          console.log("WhatsApp client not connected, fetching QR...");
           setConnected(false);
           // Fetch QR if not connected
           fetchQR();
         }
-      } catch (error) {
-        console.error("Failed to check status:", error);
+      } catch (error: any) {
+        console.error("Failed to check status:", error.response?.data || error);
         setConnected(false);
         // Try to fetch QR on status check failure
         fetchQR();
@@ -253,7 +264,7 @@ const WhatsAppWebPage = () => {
       const fetchMessages = async () => {
         try {
           console.log("Fetching messages for chat:", selectedChat);
-          const res = await axios.get(`http://localhost:8080/api/messages?chatId=${selectedChat}`);
+          const res = await axios.get(`http://localhost:8000/api/mcp/messages?chatId=${selectedChat}`);
           console.log("Raw API response:", res.data);
           
           // Keep existing messages if API returns null
@@ -373,28 +384,45 @@ const WhatsAppWebPage = () => {
       const fetchChats = async () => {
         try {
           console.log("Fetching chats...");
-          const res = await axios.get("http://localhost:8080/api/chats");
+          const res = await axios.get<Record<string, ChatData | string>>("http://localhost:8000/api/mcp/chats");
           console.log("Received chats response:", res.data);
           
-          const formattedChats = Object.entries(res.data).map(([jid, timestamp]) => {
-            console.log("Processing chat:", { jid, timestamp });
+          if (!res.data || Object.keys(res.data).length === 0) {
+            console.log("No chats available");
+            setChats([]);
+            return;
+          }
+          
+          const formattedChats = Object.entries(res.data).map(([jid, data]) => {
+            console.log("Processing chat:", { jid, data });
             const existingMessages = chatHistory[jid] || [];
             const lastMessage = existingMessages[existingMessages.length - 1];
             
+            // Extract name from data if it's an object with a name field
+            let name = jid;
+            if (typeof data === 'object' && data !== null && 'name' in data) {
+              name = data.name || formatJID(jid);
+            } else {
+              name = formatJID(jid);
+            }
+            
+            const timestamp = typeof data === 'object' && data !== null ? data.timestamp : data;
+            
             return {
               jid,
-              name: formatJID(jid),
-              timestamp: new Date(timestamp as string).toLocaleString(),
-              timestampDate: new Date(timestamp as string),
+              name: name,
+              timestamp: new Date(timestamp).toLocaleString(),
+              timestampDate: new Date(timestamp),
               unreadCount: 0,
               messages: existingMessages,
               lastMessage: lastMessage?.text
             };
           }).sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
+          
           console.log("Formatted chats:", formattedChats);
           setChats(formattedChats);
-        } catch (error) {
-          console.error("Failed to fetch chats:", error);
+        } catch (error: any) {
+          console.error("Failed to fetch chats:", error.response?.data || error);
         }
       };
 
@@ -405,6 +433,9 @@ const WhatsAppWebPage = () => {
       const pollInterval = setInterval(fetchChats, 3000);
 
       return () => clearInterval(pollInterval);
+    } else {
+      // Clear chats when disconnected
+      setChats([]);
     }
   }, [connected, chatHistory]);
 
