@@ -1,12 +1,24 @@
-from fastapi import FastAPI, File, UploadFile, Request, Form
+from fastapi import FastAPI, File, UploadFile, Request, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 import re
 from datetime import datetime
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-import torch
-import httpx
+import logging
+from typing import Optional, List, Dict
+import time
+from functools import lru_cache
 import asyncio
+from collections import deque
+import httpx
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -19,9 +31,39 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-# Load model/tokenizer at startup
-tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
-model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
+# Rate limiting setup
+class RateLimiter:
+    def __init__(self, max_requests: int, time_window: int):
+        self.max_requests = max_requests
+        self.time_window = time_window  # in seconds
+        self.requests = deque()
+
+    async def is_allowed(self, jid: str) -> bool:
+        now = time.time()
+        
+        # Remove old requests
+        while self.requests and self.requests[0] < now - self.time_window:
+            self.requests.popleft()
+        
+        if len(self.requests) >= self.max_requests:
+            return False
+            
+        self.requests.append(now)
+        return True
+
+rate_limiter = RateLimiter(max_requests=30, time_window=60)  # 30 requests per minute
+
+# Load model/tokenizer at startup with error handling
+try:
+    logger.info("Loading flan-t5-large model and tokenizer...")
+    model_name = "google/flan-t5-large"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+    model.eval()  # Set model to evaluation mode
+    logger.info("Successfully loaded model and tokenizer")
+except Exception as e:
+    logger.error(f"Failed to load model: {str(e)}")
+    raise
 
 # Enhance the chat context storage to store per-contact messages
 chat_context_storage = {
@@ -95,12 +137,39 @@ def summarize_text(text, max_length=150):
     summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return summary
 
-# Add helper function to format chat context for LLM
+# Enhanced prompt templates for flan-t5
+PROMPT_TEMPLATES = {
+    "general": """Answer the following question based on the WhatsApp chat conversation provided.
+
+Chat History:
+{context}
+
+Question: {question}
+
+Answer: Let me analyze the chat and provide a detailed response.""",
+    
+    "summary": """Summarize the key points from this WhatsApp chat conversation:
+
+{context}
+
+Summary: Let me provide a clear summary of the main points."""
+}
+
+def create_prompt(context: str, question: str, template: str = "general") -> str:
+    if not context.strip():
+        raise HTTPException(status_code=400, detail="No valid chat context available")
+        
+    prompt = PROMPT_TEMPLATES[template].format(
+        context=context,
+        question=question
+    )
+    return prompt
+
 def format_chat_context(messages):
     formatted_text = ""
     for msg in messages:
-        timestamp = datetime.fromisoformat(msg["timestamp"]) if isinstance(msg["timestamp"], str) else datetime.fromtimestamp(msg["timestamp"]/1000)
-        formatted_text += f"{timestamp.strftime('%m/%d/%y %I:%M %p')} - {msg['fromMe'] and 'You' or 'Contact'}: {msg['text']}\n"
+        timestamp = datetime.fromtimestamp(msg["Time"] / 1000)
+        formatted_text += f"{timestamp.strftime('%m/%d/%y %I:%M %p')} - {msg['IsFromMe'] and 'You' or 'Contact'}: {msg['Content']}\n"
     return formatted_text
 
 # ------------------- API Routes -------------------
@@ -264,23 +333,11 @@ async def query_llm(request: Request):
                     content={"error": "No messages found for this contact"}
                 )
             
-            # Process and format messages
-            messages = []
-            for msg in messages_data["messages"]:
-                messages.append({
-                    "timestamp": msg.get("Time", ""),
-                    "fromMe": msg.get("IsFromMe", False),
-                    "text": msg.get("Content", "")
-                })
-            
-            # Sort messages by timestamp
-            messages.sort(key=lambda x: x["timestamp"])
-            
             # Format context for LLM
-            chat_context = format_chat_context(messages)
+            chat_context = format_chat_context(messages_data["messages"])
             
             # Store in context storage
-            chat_context_storage["contact_messages"][jid] = messages
+            chat_context_storage["contact_messages"][jid] = messages_data["messages"]
             
             # Prepare prompt for LLM
             prompt = f"""Below is a WhatsApp chat conversation. Please answer the question based on the chat content.
@@ -296,26 +353,24 @@ Answer: """
             inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
             outputs = model.generate(
                 **inputs,
-                max_length=200,  # Increased for more detailed responses
+                max_length=200,
                 num_beams=4,
-                temperature=0.7,  # Added some randomness for more natural responses
+                temperature=0.7,
                 early_stopping=True,
             )
             answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
             
             return JSONResponse(content={
                 "answer": answer,
-                "context_length": len(messages)
+                "context_length": len(messages_data["messages"])
             })
             
     except httpx.HTTPError as e:
-        print(f"HTTP Error in query_llm: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": f"Failed to fetch messages: {str(e)}"}
         )
     except Exception as e:
-        print(f"Unexpected error in query_llm: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": f"Unexpected error: {str(e)}"}

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from "react";
 import axios from "axios";
 import QRCodeStyling from "qr-code-styling";
+import { debounce } from 'lodash';
 
 interface APIMessage {
   key: {
@@ -61,6 +62,31 @@ interface ChatData {
   timestamp: string;
 }
 
+// Add new types for enhanced AI features
+interface AIMessageMetadata {
+  processingTime: number;
+  confidence: number;
+  relevantDates: string[];
+}
+
+interface AIMessage {
+  id: string;
+  question: string;
+  answer: string;
+  timestamp: number;
+  error?: string;
+  contextSize?: number;
+  status: 'pending' | 'complete' | 'error';
+  metadata?: AIMessageMetadata;
+}
+
+interface AIConversationState {
+  messages: AIMessage[];
+  lastUpdated: number;
+  totalQuestions: number;
+  errorCount: number;
+}
+
 const WhatsAppWebPage = () => {
   const [qr, setQr] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
@@ -78,6 +104,12 @@ const WhatsAppWebPage = () => {
   const previousMessagesLengthRef = useRef(0);
   const qrRef = useRef<HTMLDivElement>(null);
   const qrCode = useRef<QRCodeStyling | null>(null);
+  const [aiConversations, setAiConversations] = useState<Record<string, AIConversationState>>({});
+  const [aiQuery, setAiQuery] = useState("");
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const aiMessagesContainerRef = useRef<HTMLDivElement>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const queryStartTime = useRef<number | null>(null);
 
   // Initialize QR code instance
   useEffect(() => {
@@ -210,6 +242,195 @@ const WhatsAppWebPage = () => {
       localStorage.setItem('whatsapp_chat_history', JSON.stringify(chatHistory));
     }
   }, [chatHistory]);
+
+  // Enhanced persistence with version control
+  useEffect(() => {
+    const loadAiConversations = () => {
+      const savedData = localStorage.getItem('whatsapp_ai_conversations_v2');
+      if (savedData) {
+        try {
+          const parsed = JSON.parse(savedData);
+          // Validate data structure
+          if (typeof parsed === 'object' && parsed !== null) {
+            setAiConversations(parsed);
+          }
+        } catch (error) {
+          console.error('Failed to load AI conversations:', error);
+          // Attempt to migrate old format if exists
+          const oldData = localStorage.getItem('whatsapp_ai_messages');
+          if (oldData) {
+            try {
+              const oldMessages = JSON.parse(oldData);
+              const migratedData = Object.entries(oldMessages).reduce<Record<string, AIConversationState>>((acc, [jid, messages]) => ({
+                ...acc,
+                [jid]: {
+                  messages: (messages as AIMessage[]),
+                  lastUpdated: Date.now(),
+                  totalQuestions: (messages as AIMessage[]).length,
+                  errorCount: (messages as AIMessage[]).filter((m: AIMessage) => m.error).length,
+                },
+              }), {});
+              setAiConversations(migratedData);
+              localStorage.setItem('whatsapp_ai_conversations_v2', JSON.stringify(migratedData));
+            } catch (e) {
+              console.error('Failed to migrate old AI messages:', e);
+            }
+          }
+        }
+      }
+    };
+
+    loadAiConversations();
+  }, []);
+
+  // Debounced save to localStorage
+  const saveAiConversations = debounce((conversations: Record<string, AIConversationState>) => {
+    localStorage.setItem('whatsapp_ai_conversations_v2', JSON.stringify(conversations));
+  }, 1000);
+
+  useEffect(() => {
+    if (Object.keys(aiConversations).length > 0) {
+      saveAiConversations(aiConversations);
+    }
+  }, [aiConversations]);
+
+  // Reset error state when changing chats
+  useEffect(() => {
+    setAiError(null);
+  }, [selectedChat]);
+
+  const updateAiConversation = (
+    jid: string,
+    updater: (prev: AIConversationState) => AIConversationState
+  ) => {
+    setAiConversations(prev => ({
+      ...prev,
+      [jid]: updater(prev[jid] || {
+        messages: [],
+        lastUpdated: Date.now(),
+        totalQuestions: 0,
+        errorCount: 0,
+      }),
+    }));
+  };
+
+  // Add new helper functions for AI features
+  const formatProcessingTime = (ms: number): string => {
+    return `${(ms / 1000).toFixed(1)}s`;
+  };
+
+  const formatConfidence = (confidence: number): string => {
+    return `${(confidence * 100).toFixed(1)}%`;
+  };
+
+  // Enhance the AI query function
+  const sendAiQuery = async () => {
+    if (!selectedChat || !aiQuery.trim()) return;
+
+    const trimmedQuery = aiQuery.trim();
+    queryStartTime.current = Date.now();
+    
+    const newMessage: AIMessage = {
+      id: `ai-${Date.now()}`,
+      question: trimmedQuery,
+      answer: "",
+      timestamp: Date.now(),
+      status: 'pending',
+    };
+
+    setAiError(null);
+    updateAiConversation(selectedChat, prev => ({
+      ...prev,
+      messages: [...prev.messages, newMessage],
+      lastUpdated: Date.now(),
+      totalQuestions: prev.totalQuestions + 1,
+    }));
+
+    setAiQuery("");
+    setIsAiLoading(true);
+
+    try {
+      const response = await axios.post("http://localhost:8000/api/query-llm", {
+        jid: selectedChat,
+        question: trimmedQuery,
+      });
+
+      const processingTime = Date.now() - (queryStartTime.current || Date.now());
+      
+      updateAiConversation(selectedChat, prev => ({
+        ...prev,
+        messages: prev.messages.map(msg =>
+          msg.id === newMessage.id
+            ? {
+                ...msg,
+                answer: response.data.answer,
+                contextSize: response.data.context_length,
+                status: 'complete',
+                metadata: {
+                  processingTime,
+                  confidence: response.data.confidence,
+                  relevantDates: response.data.relevant_dates,
+                },
+              }
+            : msg
+        ),
+      }));
+
+      // Scroll to bottom with smooth animation
+      requestAnimationFrame(() => {
+        if (aiMessagesContainerRef.current) {
+          aiMessagesContainerRef.current.scrollTo({
+            top: aiMessagesContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      });
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.response?.data?.error || "Failed to get a response. Please try again.";
+      
+      updateAiConversation(selectedChat, prev => ({
+        ...prev,
+        messages: prev.messages.map(msg =>
+          msg.id === newMessage.id
+            ? {
+                ...msg,
+                answer: "I encountered an error while processing your question.",
+                error: errorMessage,
+                status: 'error',
+              }
+            : msg
+        ),
+        errorCount: prev.errorCount + 1,
+      }));
+      
+      setAiError(errorMessage);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const clearAiHistory = () => {
+    if (selectedChat) {
+      setAiConversations(prev => {
+        const newConversations = { ...prev };
+        delete newConversations[selectedChat];
+        return newConversations;
+      });
+    }
+  };
+
+  // Get current chat's AI conversation state
+  const currentAiConversation = selectedChat ? aiConversations[selectedChat] || {
+    messages: [],
+    lastUpdated: 0,
+    totalQuestions: 0,
+    errorCount: 0,
+  } : {
+    messages: [],
+    lastUpdated: 0,
+    totalQuestions: 0,
+    errorCount: 0,
+  };
 
   // Format timestamp for chat list
   const formatTimestamp = (timestamp: string | Date): string => {
@@ -549,10 +770,17 @@ const WhatsAppWebPage = () => {
     chat.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const handleAiKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendAiQuery();
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#f0f2f5]">
       {/* Left Panel - Chat List */}
-      <div className="w-1/3 flex flex-col border-r border-gray-200">
+      <div className="w-1/4 flex flex-col border-r border-gray-200">
         {/* Header */}
         <div className="p-4 bg-[#f0f2f5]">
           <div className="flex items-center space-x-4 mb-4">
@@ -602,8 +830,8 @@ const WhatsAppWebPage = () => {
         </div>
       </div>
 
-      {/* Right Panel - Chat Window */}
-      <div className="w-2/3 flex flex-col bg-[#f8f9fa]">
+      {/* Middle Panel - Chat Window */}
+      <div className="w-1/2 flex flex-col bg-[#f8f9fa]">
         {!connected ? (
           <div className="flex flex-col items-center justify-center flex-grow bg-white p-8">
             <div className="bg-white p-4 rounded-lg shadow-lg">
@@ -742,6 +970,170 @@ const WhatsAppWebPage = () => {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-600"></div>
           </div>
         )}
+      </div>
+
+      {/* Right Panel - AI Assistant */}
+      <div className="w-1/4 flex flex-col bg-white border-l border-gray-200">
+        <div className="p-4 bg-[#f0f2f5] border-b border-gray-200 flex justify-between items-center">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">AI Assistant</h2>
+            {selectedChat && currentAiConversation.totalQuestions > 0 && (
+              <div className="text-sm text-gray-600 flex items-center space-x-2">
+                <span>{currentAiConversation.totalQuestions} questions asked</span>
+                {currentAiConversation.errorCount > 0 && (
+                  <span className="text-red-500">({currentAiConversation.errorCount} errors)</span>
+                )}
+              </div>
+            )}
+          </div>
+          {currentAiConversation.messages.length > 0 && (
+            <button
+              onClick={clearAiHistory}
+              className="text-gray-500 hover:text-gray-700 transition-colors duration-200"
+              title="Clear history"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {aiError && (
+          <div className="px-4 py-2 bg-red-50 border-b border-red-100 animate-fade-in">
+            <p className="text-sm text-red-600 flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+              </svg>
+              {aiError}
+            </p>
+          </div>
+        )}
+
+        <div 
+          ref={aiMessagesContainerRef}
+          className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
+        >
+          {!selectedChat ? (
+            <div className="flex items-center justify-center h-full text-gray-500">
+              <p>Select a chat to start asking questions</p>
+            </div>
+          ) : currentAiConversation.messages.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-gray-500">
+              <div className="text-center">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-12 w-12 mx-auto mb-4 text-gray-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
+                  />
+                </svg>
+                <p className="text-sm">Ask me anything about this conversation!</p>
+                <p className="text-xs text-gray-400 mt-2">I'll analyze the chat history to help you</p>
+              </div>
+            </div>
+          ) : (
+            currentAiConversation.messages.map((msg) => (
+              <div key={msg.id} className="space-y-2 animate-fade-in">
+                <div className="flex justify-end">
+                  <div className="bg-blue-100 rounded-lg p-3 max-w-[85%] transform transition-all duration-200 hover:scale-[1.02]">
+                    <p className="text-blue-800 whitespace-pre-wrap break-words">
+                      {msg.question}
+                    </p>
+                    <p className="text-xs text-blue-600/70 mt-1">
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex justify-start">
+                  <div className={`rounded-lg p-3 max-w-[85%] transform transition-all duration-200 hover:scale-[1.02] ${
+                    msg.status === 'error' ? 'bg-red-50' : 'bg-gray-100'
+                  }`}>
+                    {msg.status === 'pending' ? (
+                      <div className="flex items-center space-x-2 p-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent"></div>
+                        <p className="text-gray-600">Analyzing conversation...</p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="text-gray-800 whitespace-pre-wrap break-words">
+                          {msg.answer}
+                        </p>
+                        {msg.error && (
+                          <div className="mt-2 p-2 bg-red-100 rounded text-sm text-red-600">
+                            {msg.error}
+                          </div>
+                        )}
+                        {msg.metadata && (
+                          <div className="mt-2 text-xs text-gray-400 space-y-1 border-t border-gray-200 pt-2">
+                            <div className="flex items-center justify-between">
+                              <span>Response time: {formatProcessingTime(msg.metadata.processingTime)}</span>
+                              <span>Confidence: {formatConfidence(msg.metadata.confidence)}</span>
+                            </div>
+                            {msg.contextSize && (
+                              <p>Based on {msg.contextSize} messages</p>
+                            )}
+                            {msg.metadata.relevantDates && msg.metadata.relevantDates.length > 0 && (
+                              <p>Relevant dates: {msg.metadata.relevantDates.join(", ")}</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="p-4 bg-white border-t border-gray-200">
+          <div className="flex items-center space-x-2">
+            <div className="relative flex-1">
+              <textarea
+                value={aiQuery}
+                onChange={(e) => setAiQuery(e.target.value)}
+                onKeyPress={handleAiKeyPress}
+                placeholder={selectedChat ? "Ask about this conversation..." : "Select a chat first"}
+                disabled={!selectedChat || isAiLoading}
+                className={`w-full bg-gray-100 text-gray-800 placeholder-gray-500 px-4 py-2 pr-10 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 transition-all duration-200 ${
+                  isAiLoading ? 'opacity-50' : ''
+                }`}
+                rows={1}
+              />
+              {isAiLoading && (
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent"></div>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={sendAiQuery}
+              disabled={!selectedChat || !aiQuery.trim() || isAiLoading}
+              className={`p-2 rounded-full transition-all duration-200 ${
+                selectedChat && aiQuery.trim() && !isAiLoading
+                  ? "bg-blue-500 hover:bg-blue-600 text-white transform hover:scale-105"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="w-5 h-5"
+              >
+                <path d="M3.478 2.404a.75.75 0 00-.926.941l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.404z" />
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
