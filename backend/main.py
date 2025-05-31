@@ -23,8 +23,11 @@ app.add_middleware(
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
 
-# Simple cache
-chat_context_storage = {"full_text": ""}
+# Enhance the chat context storage to store per-contact messages
+chat_context_storage = {
+    "full_text": "",
+    "contact_messages": {}  # Store messages per contact JID
+}
 
 # MCP base URL
 MCP_BASE_URL = "http://localhost:8080"
@@ -91,6 +94,14 @@ def summarize_text(text, max_length=150):
     )
     summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return summary
+
+# Add helper function to format chat context for LLM
+def format_chat_context(messages):
+    formatted_text = ""
+    for msg in messages:
+        timestamp = datetime.fromisoformat(msg["timestamp"]) if isinstance(msg["timestamp"], str) else datetime.fromtimestamp(msg["timestamp"]/1000)
+        formatted_text += f"{timestamp.strftime('%m/%d/%y %I:%M %p')} - {msg['fromMe'] and 'You' or 'Contact'}: {msg['text']}\n"
+    return formatted_text
 
 # ------------------- API Routes -------------------
 
@@ -227,3 +238,85 @@ async def get_mcp_messages(chatId: str):
             return JSONResponse(status_code=res.status_code, content=res.json())
     except httpx.HTTPError as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to fetch messages: {str(e)}"})
+
+@app.post("/api/query-llm")
+async def query_llm(request: Request):
+    try:
+        body = await request.json()
+        jid = body.get("jid")
+        question = body.get("question")
+        
+        if not jid or not question:
+            return JSONResponse(
+                status_code=400, 
+                content={"error": "Both 'jid' and 'question' are required"}
+            )
+
+        # Fetch messages for this contact from MCP
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"{MCP_BASE_URL}/api/messages", params={"chatId": jid})
+            res.raise_for_status()
+            messages_data = res.json()
+            
+            if not messages_data.get("messages"):
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": "No messages found for this contact"}
+                )
+            
+            # Process and format messages
+            messages = []
+            for msg in messages_data["messages"]:
+                messages.append({
+                    "timestamp": msg.get("Time", ""),
+                    "fromMe": msg.get("IsFromMe", False),
+                    "text": msg.get("Content", "")
+                })
+            
+            # Sort messages by timestamp
+            messages.sort(key=lambda x: x["timestamp"])
+            
+            # Format context for LLM
+            chat_context = format_chat_context(messages)
+            
+            # Store in context storage
+            chat_context_storage["contact_messages"][jid] = messages
+            
+            # Prepare prompt for LLM
+            prompt = f"""Below is a WhatsApp chat conversation. Please answer the question based on the chat content.
+
+Chat History:
+{chat_context}
+
+Question: {question}
+
+Answer: """
+
+            # Generate response using LLM
+            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+            outputs = model.generate(
+                **inputs,
+                max_length=200,  # Increased for more detailed responses
+                num_beams=4,
+                temperature=0.7,  # Added some randomness for more natural responses
+                early_stopping=True,
+            )
+            answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            return JSONResponse(content={
+                "answer": answer,
+                "context_length": len(messages)
+            })
+            
+    except httpx.HTTPError as e:
+        print(f"HTTP Error in query_llm: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to fetch messages: {str(e)}"}
+        )
+    except Exception as e:
+        print(f"Unexpected error in query_llm: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Unexpected error: {str(e)}"}
+        )
