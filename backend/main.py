@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Request, Form, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 import re
 from datetime import datetime
 import logging
@@ -25,7 +25,7 @@ app = FastAPI()
 # CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Your frontend URL
+    allow_origins=["http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -55,11 +55,8 @@ rate_limiter = RateLimiter(max_requests=30, time_window=60)  # 30 requests per m
 
 # Load model/tokenizer at startup with error handling
 try:
-    logger.info("Loading flan-t5-large model and tokenizer...")
-    model_name = "google/flan-t5-large"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-    model.eval()  # Set model to evaluation mode
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
     logger.info("Successfully loaded model and tokenizer")
 except Exception as e:
     logger.error(f"Failed to load model: {str(e)}")
@@ -71,167 +68,51 @@ chat_context_storage = {
     "contact_messages": {}  # Store messages per contact JID
 }
 
-# MCP base URL
-MCP_BASE_URL = "http://localhost:8080"
-
-# ------------------- Helper Functions -------------------
-
-def parse_chat(text):
-    pattern = re.compile(
-        r"^(\d{1,2}/\d{1,2}/\d{2,4}), (\d{1,2}:\d{2} [APMapm]{2}) - (.*?): (.*)$"
-    )
-    messages = []
-    current_msg = None
-
-    for line in text.splitlines():
-        match = pattern.match(line)
-        if match:
-            if current_msg:
-                messages.append(current_msg)
-            date_str, time_str, sender, message = match.groups()
-            try:
-                timestamp = datetime.strptime(f"{date_str} {time_str}", "%m/%d/%y %I:%M %p")
-            except ValueError:
-                try:
-                    timestamp = datetime.strptime(f"{date_str} {time_str}", "%d/%m/%Y %I:%M %p")
-                except:
-                    continue
-            current_msg = {
-                "sender": sender,
-                "timestamp": timestamp.isoformat(),
-                "message": message,
-            }
-        else:
-            if current_msg:
-                current_msg["message"] += "\n" + line
-    if current_msg:
-        messages.append(current_msg)
-    return messages
-
-def chunk_messages(messages, max_tokens=450):
-    chunks = []
-    current_chunk = []
-    current_len = 0
-    for msg in messages:
-        msg_text = f"{msg['sender']}: {msg['message']}\n"
-        msg_len = len(msg_text)
-        if current_len + msg_len > max_tokens * 4:
-            chunks.append("".join(current_chunk))
-            current_chunk = [msg_text]
-            current_len = msg_len
-        else:
-            current_chunk.append(msg_text)
-            current_len += msg_len
-    if current_chunk:
-        chunks.append("".join(current_chunk))
-    return chunks
-
-def summarize_text(text, max_length=150):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-    outputs = model.generate(
-        **inputs,
-        max_length=max_length,
-        num_beams=4,
-        early_stopping=True,
-    )
-    summary = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return summary
-
-# Enhanced prompt templates for flan-t5
+# Enhanced prompt templates
 PROMPT_TEMPLATES = {
-    "general": """Answer the following question based on the WhatsApp chat conversation provided.
+    "general": """Based on the WhatsApp chat conversation below, please answer the following question.
+Focus on being accurate, concise, and relevant to the specific timeframe of messages provided.
 
 Chat History:
 {context}
 
 Question: {question}
 
-Answer: Let me analyze the chat and provide a detailed response.""",
+Answer: """,
     
-    "summary": """Summarize the key points from this WhatsApp chat conversation:
+    "summary": """Analyze the following WhatsApp chat messages and provide a concise summary.
+Focus on key points, decisions, and important information.
 
+Messages:
 {context}
 
-Summary: Let me provide a clear summary of the main points."""
+Summary: """,
 }
 
 def create_prompt(context: str, question: str, template: str = "general") -> str:
-    if not context.strip():
-        raise HTTPException(status_code=400, detail="No valid chat context available")
-        
-    prompt = PROMPT_TEMPLATES[template].format(
+    return PROMPT_TEMPLATES[template].format(
         context=context,
         question=question
     )
-    return prompt
 
+# Add helper function to format chat context for LLM
 def format_chat_context(messages):
     formatted_text = ""
     for msg in messages:
-        timestamp = datetime.fromtimestamp(msg["Time"] / 1000)
-        formatted_text += f"{timestamp.strftime('%m/%d/%y %I:%M %p')} - {msg['IsFromMe'] and 'You' or 'Contact'}: {msg['Content']}\n"
+        try:
+            timestamp = datetime.fromtimestamp(float(msg["timestamp"]) / 1000)
+            formatted_text += f"{timestamp.strftime('%m/%d/%y %I:%M %p')} - {msg['fromMe'] and 'You' or 'Contact'}: {msg['text']}\n"
+        except Exception as e:
+            print(f"Error formatting message: {e}")
+            continue
     return formatted_text
 
-# ------------------- API Routes -------------------
+# MCP base URL
+MCP_BASE_URL = "http://localhost:8080"
 
 @app.get("/")
 def read_root():
     return {"message": "ThreadScribe backend running."}
-
-@app.post("/api/parse-and-summarize")
-async def parse_and_summarize(file: UploadFile = File(...)):
-    try:
-        contents = await file.read()
-        text = contents.decode("utf-8")
-        messages = parse_chat(text)
-        chunks = chunk_messages(messages)
-        full_text = chunks[0] if chunks else ""
-        summary = summarize_text(full_text)
-        chat_context_storage["full_text"] = full_text
-        return JSONResponse(content={"summary": summary})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-@app.post("/api/chat")
-async def chat_with_context(query: str = Form(...)):
-    try:
-        context = chat_context_storage.get("full_text", "")
-        if not context:
-            return JSONResponse(status_code=400, content={"error": "No chat context available."})
-
-        prompt = f"Chat:\n{context}\n\nQuestion: {query}\nAnswer:"
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-        outputs = model.generate(
-            **inputs,
-            max_length=150,
-            num_beams=4,
-            early_stopping=True,
-        )
-        answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return JSONResponse(content={"answer": answer})
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-@app.post("/api/mcp/send-message")
-async def proxy_send_message(request: Request):
-    try:
-        body = await request.json()
-        if "phone" in body:
-            body["recipient"] = body.pop("phone")
-
-        async with httpx.AsyncClient() as client:
-            res = await client.post(
-                f"{MCP_BASE_URL}/api/send",
-                json=body,
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                content = res.json()
-            except Exception:
-                content = {"error": res.text}
-        return JSONResponse(status_code=res.status_code, content=content)
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/mcp/qr")
 async def get_mcp_qr():
@@ -271,16 +152,6 @@ async def get_mcp_status():
         print(f"Unexpected error in get_mcp_status: {str(e)}")
         return JSONResponse(status_code=500, content={"error": f"Unexpected error: {str(e)}"})
 
-@app.post("/api/mcp/logout")
-async def logout_mcp():
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.post(f"{MCP_BASE_URL}/api/logout")
-            res.raise_for_status()
-            return JSONResponse(status_code=res.status_code, content=res.json())
-    except httpx.HTTPError as e:
-        return JSONResponse(status_code=500, content={"error": f"Logout failed: {str(e)}"})
-
 @app.get("/api/mcp/chats")
 async def get_mcp_chats():
     try:
@@ -308,6 +179,27 @@ async def get_mcp_messages(chatId: str):
     except httpx.HTTPError as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to fetch messages: {str(e)}"})
 
+@app.post("/api/mcp/send-message")
+async def proxy_send_message(request: Request):
+    try:
+        body = await request.json()
+        if "phone" in body:
+            body["recipient"] = body.pop("phone")
+
+        async with httpx.AsyncClient() as client:
+            res = await client.post(
+                f"{MCP_BASE_URL}/api/send",
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                content = res.json()
+            except Exception:
+                content = {"error": res.text}
+        return JSONResponse(status_code=res.status_code, content=content)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 @app.post("/api/query-llm")
 async def query_llm(request: Request):
     try:
@@ -333,11 +225,23 @@ async def query_llm(request: Request):
                     content={"error": "No messages found for this contact"}
                 )
             
+            # Process and format messages
+            messages = []
+            for msg in messages_data["messages"]:
+                messages.append({
+                    "timestamp": msg.get("Time", ""),
+                    "fromMe": msg.get("IsFromMe", False),
+                    "text": msg.get("Content", "")
+                })
+            
+            # Sort messages by timestamp
+            messages.sort(key=lambda x: x["timestamp"])
+            
             # Format context for LLM
-            chat_context = format_chat_context(messages_data["messages"])
+            chat_context = format_chat_context(messages)
             
             # Store in context storage
-            chat_context_storage["contact_messages"][jid] = messages_data["messages"]
+            chat_context_storage["contact_messages"][jid] = messages
             
             # Prepare prompt for LLM
             prompt = f"""Below is a WhatsApp chat conversation. Please answer the question based on the chat content.
@@ -362,16 +266,20 @@ Answer: """
             
             return JSONResponse(content={
                 "answer": answer,
-                "context_length": len(messages_data["messages"])
+                "context_length": len(messages)
             })
             
     except httpx.HTTPError as e:
+        print(f"HTTP Error in query_llm: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": f"Failed to fetch messages: {str(e)}"}
         )
     except Exception as e:
+        print(f"Unexpected error in query_llm: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": f"Unexpected error: {str(e)}"}
         )
+
+# ... rest of the existing code ...
