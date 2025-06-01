@@ -10,8 +10,12 @@ from functools import lru_cache
 import asyncio
 from collections import deque
 import httpx
-import torch
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import google.generativeai as genai
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +23,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Configure Gemini
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyAyBON_nBokxQ2vZpsEXyd__auVg8OyS20')
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-2.0-flash')
+
+# Create a chat instance
+chat = model.start_chat(history=[])
 
 app = FastAPI()
 
@@ -53,59 +65,166 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(max_requests=30, time_window=60)  # 30 requests per minute
 
-# Load model/tokenizer at startup with error handling
-try:
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-large")
-    logger.info("Successfully loaded model and tokenizer")
-except Exception as e:
-    logger.error(f"Failed to load model: {str(e)}")
-    raise
-
 # Enhance the chat context storage to store per-contact messages
 chat_context_storage = {
     "full_text": "",
     "contact_messages": {}  # Store messages per contact JID
 }
 
-# Enhanced prompt templates
+# Enhanced prompt templates with better structure
 PROMPT_TEMPLATES = {
-    "general": """Based on the WhatsApp chat conversation below, please answer the following question.
-Focus on being accurate, concise, and relevant to the specific timeframe of messages provided.
+    "general": """Here's a WhatsApp chat conversation:
 
-Chat History:
 {context}
 
-Question: {question}
+User question: {question}
 
-Answer: """,
+Please provide a clear and concise answer based only on the information shown in the chat above. If the information needed is not in the chat, please say so.""",
     
-    "summary": """Analyze the following WhatsApp chat messages and provide a concise summary.
-Focus on key points, decisions, and important information.
+    "summary": """Here's a WhatsApp chat conversation:
 
-Messages:
 {context}
 
-Summary: """,
+Please provide a concise summary of this conversation, focusing on:
+1. Main topics discussed
+2. Key decisions made
+3. Important action items or tasks
+4. Any deadlines mentioned""",
+
+    "analysis": """Here's a WhatsApp chat conversation:
+
+{context}
+
+Please analyze this conversation and extract:
+1. Main participants and their roles
+2. Key discussion points
+3. Decisions made
+4. Action items assigned
+5. Important dates or deadlines
+6. Any unresolved questions
+
+Specific question: {question}"""
 }
 
+def format_chat_context(messages):
+    """
+    Format chat messages into a clear, readable conversation format.
+    Includes sender info, timestamps, and proper spacing.
+    """
+    formatted_text = ""
+    current_date = None
+    
+    # Sort messages by timestamp
+    def parse_timestamp(ts):
+        try:
+            # Try parsing as milliseconds since epoch
+            return float(ts)
+        except (ValueError, TypeError):
+            try:
+                # Try parsing as ISO format
+                dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                return dt.timestamp()
+            except (ValueError, AttributeError):
+                logger.error(f"Could not parse timestamp: {ts}")
+                return 0
+    
+    messages.sort(key=lambda x: parse_timestamp(x["timestamp"]))
+    
+    for msg in messages:
+        try:
+            # Parse timestamp
+            ts = parse_timestamp(msg["timestamp"])
+            timestamp = datetime.fromtimestamp(ts)
+            
+            message_date = timestamp.strftime('%Y-%m-%d')
+            
+            # Add date header if it's a new date
+            if message_date != current_date:
+                if current_date is not None:
+                    formatted_text += "\n"
+                formatted_text += f"\n[{message_date}]\n"
+                current_date = message_date
+            
+            # Format the message with time and sender
+            time_str = timestamp.strftime('%I:%M %p')
+            sender = "You" if msg["fromMe"] else "Contact"
+            message_text = msg.get("text", "").strip()
+            
+            # Skip empty messages
+            if not message_text:
+                continue
+                
+            # Add the formatted message
+            formatted_text += f"[{time_str}] {sender}: {message_text}\n"
+            
+        except Exception as e:
+            logger.error(f"Error formatting message: {e}, message: {msg}")
+            continue
+            
+    return formatted_text.strip()
+
 def create_prompt(context: str, question: str, template: str = "general") -> str:
+    """
+    Create a well-structured prompt for Gemini using the specified template.
+    Handles different types of analysis based on the template type.
+    """
+    if template not in PROMPT_TEMPLATES:
+        template = "general"
+        
     return PROMPT_TEMPLATES[template].format(
         context=context,
         question=question
     )
 
-# Add helper function to format chat context for LLM
-def format_chat_context(messages):
-    formatted_text = ""
-    for msg in messages:
-        try:
-            timestamp = datetime.fromtimestamp(float(msg["timestamp"]) / 1000)
-            formatted_text += f"{timestamp.strftime('%m/%d/%y %I:%M %p')} - {msg['fromMe'] and 'You' or 'Contact'}: {msg['text']}\n"
-        except Exception as e:
-            print(f"Error formatting message: {e}")
-            continue
-    return formatted_text
+# Function to call Gemini API
+async def call_gemini_llm(prompt: str) -> Dict:
+    """
+    Call the Gemini API with proper configuration and error handling.
+    Returns a dictionary containing the response and metadata.
+    """
+    try:
+        # Configure generation parameters
+        generation_config = {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 40,
+            "max_output_tokens": 2048,
+        }
+
+        # Send message using chat interface with generation config
+        response = await chat.send_message_async(
+            prompt,
+            generation_config=generation_config
+        )
+
+        if not response or not response.text:
+            raise Exception("Empty response from Gemini API")
+
+        # Extract and process the response
+        answer = response.text.strip()
+        
+        # Extract any dates mentioned in the response
+        date_pattern = r'\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b'
+        relevant_dates = list(set(re.findall(date_pattern, answer)))
+        
+        # Calculate a simple confidence score based on response length and structure
+        confidence = min(0.95, 0.5 + (len(answer.split()) / 200))
+        
+        return {
+            "answer": answer,
+            "confidence": confidence,
+            "relevant_dates": relevant_dates,
+            "error": None
+        }
+        
+    except Exception as e:
+        logger.error(f"Gemini API error: {str(e)}")
+        return {
+            "answer": "I apologize, but I encountered an issue processing your request. Please try again.",
+            "confidence": 0,
+            "relevant_dates": [],
+            "error": str(e)
+        }
 
 # MCP base URL
 MCP_BASE_URL = "http://localhost:8080"
@@ -205,13 +324,22 @@ async def query_llm(request: Request):
     try:
         body = await request.json()
         jid = body.get("jid")
-        question = body.get("question")
+        question = body.get("question", "").strip()
+        template = body.get("template", "general")
         
         if not jid or not question:
             return JSONResponse(
                 status_code=400, 
                 content={"error": "Both 'jid' and 'question' are required"}
             )
+
+        # Auto-detect template based on question content
+        if template == "general":
+            question_lower = question.lower()
+            if any(word in question_lower for word in ["summarize", "summary", "overview"]):
+                template = "summary"
+            elif any(word in question_lower for word in ["analyze", "analysis", "details", "breakdown"]):
+                template = "analysis"
 
         # Fetch messages for this contact from MCP
         async with httpx.AsyncClient() as client:
@@ -234,52 +362,43 @@ async def query_llm(request: Request):
                     "text": msg.get("Content", "")
                 })
             
-            # Sort messages by timestamp
-            messages.sort(key=lambda x: x["timestamp"])
-            
             # Format context for LLM
             chat_context = format_chat_context(messages)
             
             # Store in context storage
             chat_context_storage["contact_messages"][jid] = messages
             
-            # Prepare prompt for LLM
-            prompt = f"""Below is a WhatsApp chat conversation. Please answer the question based on the chat content.
+            # Create prompt using selected template
+            prompt = create_prompt(chat_context, question, template)
 
-Chat History:
-{chat_context}
-
-Question: {question}
-
-Answer: """
-
-            # Generate response using LLM
-            inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
-            outputs = model.generate(
-                **inputs,
-                max_length=200,
-                num_beams=4,
-                temperature=0.7,
-                early_stopping=True,
-            )
-            answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            # Generate response using Gemini
+            response = await call_gemini_llm(prompt)
             
+            if response.get("error"):
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": response["error"]}
+                )
+
             return JSONResponse(content={
-                "answer": answer,
-                "context_length": len(messages)
+                "answer": response["answer"],
+                "context_length": len(messages),
+                "confidence": response["confidence"],
+                "relevant_dates": response["relevant_dates"],
+                "template_used": template
             })
             
     except httpx.HTTPError as e:
-        print(f"HTTP Error in query_llm: {str(e)}")
+        logger.error(f"HTTP Error in query_llm: {str(e)}")
         return JSONResponse(
             status_code=500,
             content={"error": f"Failed to fetch messages: {str(e)}"}
         )
     except Exception as e:
-        print(f"Unexpected error in query_llm: {str(e)}")
+        logger.error(f"Unexpected error in query_llm: {str(e)}")
         return JSONResponse(
             status_code=500,
-            content={"error": f"Unexpected error: {str(e)}"}
+            content={"error": f"An unexpected error occurred: {str(e)}"}
         )
 
 # ... rest of the existing code ...
