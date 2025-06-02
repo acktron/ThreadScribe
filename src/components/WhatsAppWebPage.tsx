@@ -31,6 +31,8 @@ interface Message {
 interface Chat {
   jid: string;
   name: string;
+  phoneNumber: string;
+  imageUrl: string;
   lastMessage?: string;
   timestamp: string;
   timestampDate: Date;
@@ -86,6 +88,59 @@ interface AIConversationState {
   totalQuestions: number;
   errorCount: number;
 }
+
+interface ContactInfo {
+  name: string;
+  phoneNumber: string;
+  imageUrl: string;
+}
+
+const formatPhoneNumber = (phoneNumber: string): string => {
+  // Remove any non-numeric characters
+  const cleaned = phoneNumber.replace(/\D/g, '');
+  
+  // Handle different formats
+  if (cleaned.length >= 10) {
+    const lastTen = cleaned.slice(-10);
+    const countryCode = cleaned.slice(0, cleaned.length - 10) || '91';
+    return `+${countryCode} ${lastTen.slice(0, 3)}-${lastTen.slice(3, 6)}-${lastTen.slice(6)}`;
+  }
+  
+  return phoneNumber;
+};
+
+const getContactInitials = (name: string): string => {
+  return name
+    .split(' ')
+    .map(part => part[0])
+    .slice(0, 2)  // Take only first two initials
+    .join('')
+    .toUpperCase();
+};
+
+const getAvatarUrl = (name: string, size: number = 48): string => {
+  const initials = getContactInitials(name);
+  const colors = ['1abc9c', '2ecc71', '3498db', '9b59b6', 'f1c40f', 'e67e22', 'e74c3c'];
+  const colorIndex = Math.abs(name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % colors.length;
+  const backgroundColor = colors[colorIndex];
+  
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&size=${size}&background=${backgroundColor}&color=fff&bold=true&format=svg`;
+};
+
+const formatJID = (jid: string): ContactInfo => {
+  // Remove @s.whatsapp.net and any other non-numeric characters for the phone
+  const phoneNumber = jid.replace("@s.whatsapp.net", "").replace(/[^\d]/g, '');
+  const formattedNumber = formatPhoneNumber(phoneNumber);
+  
+  // Generate a readable name if none exists
+  const name = `Contact ${formattedNumber}`;
+  
+  return { 
+    name, 
+    phoneNumber: formattedNumber,
+    imageUrl: getAvatarUrl(name)
+  };
+};
 
 const WhatsAppWebPage = () => {
   const [qr, setQr] = useState<string | null>(null);
@@ -606,64 +661,113 @@ const WhatsAppWebPage = () => {
         try {
           console.log("Fetching chats...");
           const res = await axios.get<Record<string, ChatData | string>>("http://localhost:8000/api/mcp/chats");
-          console.log("Received chats response:", res.data);
           
-          if (!res.data || Object.keys(res.data).length === 0) {
-            console.log("No chats available");
+          // Log the entire response for debugging
+          console.log("Chats API Response:", {
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers,
+            data: res.data
+          });
+
+          // Validate response data
+          if (!res.data) {
+            console.error("No data received from chats API");
+            return;
+          }
+
+          // Check if data is empty
+          const chatEntries = Object.entries(res.data);
+          console.log("Number of chats received:", chatEntries.length);
+          
+          if (chatEntries.length === 0) {
+            console.log("No chats available in the response");
             setChats([]);
             return;
           }
-          
-          const formattedChats = Object.entries(res.data).map(([jid, data]) => {
-            console.log("Processing chat:", { jid, data });
-            const existingMessages = chatHistory[jid] || [];
-            const lastMessage = existingMessages[existingMessages.length - 1];
-            
-            // Extract name from data if it's an object with a name field
-            let name = jid;
-            if (typeof data === 'object' && data !== null && 'name' in data) {
-              name = data.name || formatJID(jid);
-            } else {
-              name = formatJID(jid);
-            }
-            
-            const timestamp = typeof data === 'object' && data !== null ? data.timestamp : data;
-            
-            return {
-              jid,
-              name: name,
-              timestamp: new Date(timestamp).toLocaleString(),
-              timestampDate: new Date(timestamp),
-              unreadCount: 0,
-              messages: existingMessages,
-              lastMessage: lastMessage?.text
-            };
-          }).sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
-          
-          console.log("Formatted chats:", formattedChats);
+
+          // Process each chat with detailed logging
+          const formattedChats = chatEntries
+            .map(([jid, data]) => {
+              console.log("Processing chat entry:", { jid, data });
+              
+              try {
+                const existingMessages = chatHistory[jid] || [];
+                const lastMessage = existingMessages[existingMessages.length - 1];
+                
+                // Parse the contact info
+                const contactInfo = formatJID(jid);
+                console.log("Parsed contact info:", contactInfo);
+
+                // Determine name and timestamp
+                let name = contactInfo.name;
+                let timestamp = new Date().toISOString();
+
+                if (typeof data === 'object' && data !== null && 'name' in data && 'timestamp' in data) {
+                  console.log("Chat data is an object:", data);
+                  if (data.name) {
+                    name = data.name;
+                  }
+                  if (data.timestamp) {
+                    timestamp = data.timestamp;
+                  }
+                } else if (typeof data === 'string') {
+                  console.log("Chat data is a string timestamp:", data);
+                  timestamp = data;
+                }
+
+                const chat: Chat = {
+                  jid,
+                  name,
+                  phoneNumber: contactInfo.phoneNumber,
+                  imageUrl: getAvatarUrl(name),
+                  lastMessage: lastMessage?.text,
+                  timestamp: new Date(timestamp).toLocaleString(),
+                  timestampDate: new Date(timestamp),
+                  unreadCount: 0,
+                  messages: existingMessages
+                };
+
+                console.log("Formatted chat:", chat);
+                return chat;
+              } catch (error) {
+                console.error("Error processing chat:", { jid, data, error });
+                return null;
+              }
+            })
+            .filter((chat): chat is NonNullable<typeof chat> => chat !== null)
+            .sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
+
+          console.log("Final formatted chats:", formattedChats);
           setChats(formattedChats);
+          
         } catch (error: any) {
-          console.error("Failed to fetch chats:", error.response?.data || error);
+          console.error("Failed to fetch chats:", {
+            error: error,
+            response: error.response?.data,
+            status: error.response?.status,
+            message: error.message
+          });
+          
+          if (error.response?.status === 401) {
+            console.log("Unauthorized - resetting connection state");
+            setConnected(false);
+          }
         }
       };
 
       // Initial fetch
       fetchChats();
 
-      // Set up polling every 3 seconds
-      const pollInterval = setInterval(fetchChats, 3000);
+      // Set up polling with a longer interval to avoid too many requests
+      const pollInterval = setInterval(fetchChats, 5000);
 
       return () => clearInterval(pollInterval);
     } else {
-      // Clear chats when disconnected
+      console.log("Not connected - clearing chats");
       setChats([]);
     }
   }, [connected, chatHistory]);
-
-  const formatJID = (jid: string): string => {
-    // Remove @s.whatsapp.net and format phone number
-    return jid.replace("@s.whatsapp.net", "").replace(/(\d{2})(\d{3})(\d{3})(\d{4})/, "+$1 $2-$3-$4");
-  };
 
   const sendMessage = async () => {
     if (!selectedChat || !newMsg.trim()) {
@@ -778,50 +882,103 @@ const WhatsAppWebPage = () => {
   };
 
   return (
-    <div className="flex h-screen bg-[#f0f2f5]">
+    <div className="h-screen w-screen flex bg-[#f0f2f5] font-sans antialiased overflow-hidden">
       {/* Left Panel - Chat List */}
-      <div className="w-1/4 flex flex-col border-r border-gray-200">
+      <div className="min-w-[280px] max-w-[420px] w-[30%] flex flex-col bg-white border-r border-gray-200">
         {/* Header */}
-        <div className="p-4 bg-[#f0f2f5]">
-          <div className="flex items-center space-x-4 mb-4">
-            <div className="w-10 h-10 rounded-full bg-gray-300"></div>
-            <div className="flex-1">
-              <h2 className="text-gray-800 font-medium">WhatsApp Web</h2>
+        <div className="px-4 py-3 bg-white border-b border-gray-200">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <h2 className="text-[16px] font-medium text-gray-800">Messages</h2>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zM11 13a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                </svg>
+              </button>
+              <button className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" />
+                </svg>
+              </button>
             </div>
           </div>
           {/* Search Bar */}
           <div className="relative">
+            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-[18px] w-[18px] text-gray-500" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
+              </svg>
+            </div>
             <input
               type="text"
-              placeholder="Search or start new chat"
+              placeholder="Search messages"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white text-gray-800 placeholder-gray-500 px-4 py-2 rounded-lg focus:outline-none border border-gray-200"
+              className="w-full bg-gray-100 text-gray-800 placeholder-gray-500 pl-10 pr-4 py-[8px] rounded-lg focus:outline-none focus:bg-white focus:ring-1 focus:ring-gray-200 text-[15px]"
             />
           </div>
         </div>
 
         {/* Chat List */}
         <div className="flex-1 overflow-y-auto bg-white">
-          {!connected && <p className="text-gray-600 p-4">Waiting for connection...</p>}
+          {!connected && (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-gray-500 text-sm">
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent mx-auto mb-4"></div>
+                <p>Connecting to messages...</p>
+              </div>
+            </div>
+          )}
           {connected && (
-            <div className="space-y-1">
+            <div className="divide-y divide-gray-100">
               {filteredChats.map((chat) => (
                 <button
                   key={chat.jid}
                   onClick={() => setSelectedChat(chat.jid)}
-                  className={`w-full text-left p-3 hover:bg-gray-100 flex items-center space-x-3
-                    ${selectedChat === chat.jid ? "bg-[#f0f2f5]" : ""}`}
+                  className={`w-full text-left px-4 py-3 hover:bg-gray-100 transition-colors duration-200 flex items-center space-x-3
+                    ${selectedChat === chat.jid ? "bg-gray-100" : ""}`}
                 >
-                  <div className="w-12 h-12 rounded-full bg-gray-300 flex-shrink-0"></div>
+                  <div className="w-12 h-12 rounded-full bg-gray-200 flex-shrink-0 overflow-hidden">
+                    <img 
+                      src={chat.imageUrl}
+                      alt={chat.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = getAvatarUrl(chat.name);
+                      }}
+                    />
+                  </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex justify-between">
-                      <span className="text-gray-800 font-medium truncate">{chat.name}</span>
-                      <span className="text-xs text-gray-500">{chat.timestamp || ''}</span>
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-[16px] font-medium text-gray-800 truncate">{chat.name}</span>
+                      <span className="text-xs text-gray-500 flex-shrink-0">{chat.timestamp || ''}</span>
                     </div>
-                    {chat.lastMessage && (
-                      <p className="text-gray-600 text-sm truncate">{chat.lastMessage}</p>
-                    )}
+                    <div className="flex items-center space-x-1">
+                      <p className="text-[14px] text-gray-500 truncate leading-5 flex-1">
+                        {chat.phoneNumber}
+                        {chat.lastMessage && (
+                          <>
+                            <span className="mx-1">·</span>
+                            {chat.lastMessage}
+                          </>
+                        )}
+                      </p>
+                      {chat.unreadCount > 0 && (
+                        <span className="flex-shrink-0 bg-[#25d366] text-white rounded-full text-xs px-[6px] py-[2px] min-w-[20px] text-center">
+                          {chat.unreadCount}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </button>
               ))}
@@ -831,65 +988,104 @@ const WhatsAppWebPage = () => {
       </div>
 
       {/* Middle Panel - Chat Window */}
-      <div className="w-1/2 flex flex-col bg-[#f8f9fa]">
+      <div className="flex-1 min-w-[500px] max-w-[800px] flex flex-col bg-[#efeae2] relative">
         {!connected ? (
           <div className="flex flex-col items-center justify-center flex-grow bg-white p-8">
-            <div className="bg-white p-4 rounded-lg shadow-lg">
-              <h1 className="text-2xl font-bold mb-6 text-center text-gray-800">To use WhatsApp on your computer:</h1>
-              <ol className="list-decimal list-inside space-y-4 mb-8 text-gray-700">
+            <div className="bg-white p-6 rounded-xl shadow-sm max-w-md w-full text-center">
+              <h1 className="text-xl font-medium mb-6 text-gray-800">Connect to Messages</h1>
+              <ol className="list-decimal list-inside space-y-4 mb-8 text-gray-600 text-sm">
                 <li>Open WhatsApp on your phone</li>
                 <li>Tap Menu or Settings and select WhatsApp Web</li>
                 <li>Point your phone to this screen to capture the QR code</li>
               </ol>
-              <div ref={qrRef} className="inline-block bg-white p-4 rounded-lg shadow-lg"></div>
-              {qr && <div className="mt-2 text-sm text-gray-500">QR Code Length: {qr.length}</div>}
+              <div ref={qrRef} className="inline-block bg-white p-4 rounded-lg shadow-sm"></div>
             </div>
           </div>
         ) : selectedChat ? (
           <>
             {/* Chat Header */}
-            <div className="p-4 bg-[#f0f2f5] flex items-center space-x-4 border-b border-gray-200">
-              <div className="w-10 h-10 rounded-full bg-gray-300"></div>
-              <div className="flex-1">
-                <h2 className="text-gray-800 font-medium">{formatJID(selectedChat)}</h2>
-                <p className="text-sm text-gray-600">online</p>
+            <div className="absolute top-0 left-0 right-0 z-10">
+              <div className="px-4 py-2 bg-[#f0f2f5] flex items-center space-x-4 border-b border-gray-200">
+                {selectedChat && (() => {
+                  const chat = chats.find(c => c.jid === selectedChat);
+                  if (!chat) return null;
+                  
+                  return (
+                    <>
+                      <div className="w-10 h-10 rounded-full bg-gray-200 flex-shrink-0 overflow-hidden">
+                        <img 
+                          src={chat.imageUrl}
+                          alt={chat.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            target.src = getAvatarUrl(chat.name);
+                          }}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h2 className="text-[16px] font-medium text-gray-800 truncate">{chat.name}</h2>
+                        <p className="text-sm text-gray-500">{chat.phoneNumber}</p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <button className="p-2 rounded-full hover:bg-gray-200/60 transition-colors duration-200">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M2 6a2 2 0 012-2h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM14.553 7.106A1 1 0 0014 8v4a1 1 0 00.553.894l2 1A1 1 0 0018 13V7a1 1 0 00-1.447-.894l-2 1z" />
+                          </svg>
+                        </button>
+                        <button className="p-2 rounded-full hover:bg-gray-200/60 transition-colors duration-200">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                          </svg>
+                        </button>
+                        <button className="p-2 rounded-full hover:bg-gray-200/60 transition-colors duration-200">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" />
+                          </svg>
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
             {/* Messages Area */}
             <div 
-              className="flex-1 overflow-y-auto p-4 bg-[#efeae2]" 
+              className="flex-1 overflow-y-auto p-4 pt-20 bg-[#efeae2] bg-opacity-90 bg-[url('/whatsapp-bg.png')] bg-repeat" 
               ref={messagesContainerRef}
               onScroll={handleScroll}
             >
               {loading ? (
                 <div className="flex justify-center items-center h-full">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-600"></div>
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent"></div>
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {messages.map((msg) => (
                     <div
                       key={msg.id}
-                      className={`flex ${msg.fromMe ? "justify-end" : "justify-start"}`}
+                      className={`flex ${msg.fromMe ? "justify-end" : "justify-start"} mb-1`}
                     >
                       <div
-                        className={`max-w-[70%] rounded-lg p-3 ${
-                          msg.fromMe ? "bg-[#d9fdd3]" : "bg-white"
+                        className={`max-w-[65%] px-3 py-2 shadow-sm ${
+                          msg.fromMe 
+                            ? "bg-[#d9fdd3] rounded-xl rounded-tr-none" 
+                            : "bg-white rounded-xl rounded-tl-none border border-gray-200"
                         }`}
                       >
-                        <p className="text-gray-800 whitespace-pre-wrap break-words">
+                        <p className="text-[14.2px] text-gray-800 leading-[19px] whitespace-pre-wrap break-words">
                           {msg.text}
                         </p>
                         <div className="flex items-center justify-end gap-1 mt-1">
-                          <p className="text-gray-500 text-xs">
+                          <p className="text-xs text-gray-500">
                             {new Date(msg.timestamp).toLocaleTimeString([], {
                               hour: "2-digit",
                               minute: "2-digit"
                             })}
                           </p>
                           {msg.fromMe && (
-                            <span className="text-xs text-gray-500">
+                            <span className="text-gray-500">
                               {msg.status === 'sent' && (
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3">
                                   <path fillRule="evenodd" d="M3.97 3.97a.75.75 0 011.06 0l13.72 13.72V8.25a.75.75 0 011.5 0V19.5a.75.75 0 01-.75.75H8.25a.75.75 0 010-1.5h9.44L3.97 5.03a.75.75 0 010-1.06z" clipRule="evenodd" />
@@ -901,7 +1097,7 @@ const WhatsAppWebPage = () => {
                                 </svg>
                               )}
                               {msg.status === 'read' && (
-                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#34b7f1" className="w-3 h-3">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#53bdeb" className="w-3 h-3">
                                   <path fillRule="evenodd" d="M4.72 3.97a.75.75 0 011.06 0l7.5 7.5a.75.75 0 010 1.06l-7.5 7.5a.75.75 0 01-1.06-1.06L11.69 12 4.72 5.03a.75.75 0 010-1.06zm6 0a.75.75 0 011.06 0l7.5 7.5a.75.75 0 010 1.06l-7.5 7.5a.75.75 0 11-1.06-1.06L17.69 12l-6.97-6.97a.75.75 0 010-1.06z" clipRule="evenodd" />
                                 </svg>
                               )}
@@ -916,83 +1112,93 @@ const WhatsAppWebPage = () => {
             </div>
 
             {/* Message Input */}
-            <div className="p-4 bg-[#f0f2f5]">
-              <div className="flex items-center space-x-4">
-                <textarea
-                  value={newMsg}
-                  onChange={(e) => setNewMsg(e.target.value)}
-                  onKeyPress={handleKeyPress}
-                  placeholder="Type a message"
-                  className="flex-1 bg-white text-gray-800 placeholder-gray-500 px-4 py-2 rounded-lg resize-none focus:outline-none border border-gray-200"
-                  rows={1}
-                />
-                <button
-                  onClick={() => {
-                    console.log("Send button clicked");
-                    console.log("Selected chat:", selectedChat);
-                    console.log("Message:", newMsg);
-                    if (newMsg.trim()) {
-                      sendMessage();
-                    }
-                  }}
-                  disabled={!newMsg.trim() || !selectedChat}
-                  className={`p-2 rounded-full ${
-                    newMsg.trim() && selectedChat ? "bg-[#00a884] hover:bg-[#00916e]" : "bg-gray-200"
-                  }`}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    fill="currentColor"
-                    className={`w-6 h-6 ${newMsg.trim() && selectedChat ? "text-white" : "text-gray-400"}`}
-                  >
-                    <path d="M3.478 2.404a.75.75 0 011.06 0l13.72 13.72V8.25a.75.75 0 011.5 0V19.5a.75.75 0 01-.75.75H8.25a.75.75 0 010-1.5h9.44L3.97 5.03a.75.75 0 010-1.06z" />
+            <div className="p-3 bg-[#f0f2f5]">
+              <div className="flex items-center space-x-2 bg-white px-4 py-3 rounded-lg">
+                <button className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 100-2 1 1 0 000 2zm7-1a1 1 0 11-2 0 1 1 0 012 0zm-7.536 5.879a1 1 0 001.415 0 3 3 0 014.242 0 1 1 0 001.415-1.415 5 5 0 00-7.072 0 1 1 0 000 1.415z" clipRule="evenodd" />
                   </svg>
                 </button>
+                <button className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                <div className="flex-1">
+                  <textarea
+                    value={newMsg}
+                    onChange={(e) => setNewMsg(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder="Type a message"
+                    className="w-full bg-transparent text-gray-800 placeholder-gray-500 resize-none focus:outline-none min-h-[24px] max-h-[100px] text-[15px]"
+                    rows={1}
+                  />
+                </div>
+                {!newMsg.trim() ? (
+                  <button className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (newMsg.trim() && selectedChat) {
+                        sendMessage();
+                      }
+                    }}
+                    className="p-2 rounded-full bg-[#00a884] hover:bg-[#00916e] text-white transition-colors duration-200"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                )}
               </div>
             </div>
           </>
         ) : connected ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              className="w-16 h-16 mb-4"
-            >
-              <path d="M4.913 2.658c2.075-.27 4.19-.408 6.337-.408 2.147 0 4.262.139 6.337.408 1.922.25 3.291 1.861 3.405 3.727a4.403 4.403 0 0 0-1.032-.211 50.89 50.89 0 0 0-8.42 0c-2.358.196-4.04 2.19-4.04 4.434v4.286a4.47 4.47 0 0 0 2.433 3.984L7.28 21.53A.75.75 0 0 1 6 21v-4.03a48.527 48.527 0 0 1-1.087-.128C2.905 16.58 1.5 14.833 1.5 12.862V6.638c0-1.97 1.405-3.718 3.413-3.979Z" />
-              <path d="M15.75 7.5c-1.376 0-2.739.057-4.086.169C10.124 7.797 9 9.103 9 10.609v4.285c0 1.507 1.128 2.814 2.67 2.94 1.243.102 2.5.157 3.768.165l2.782 2.781a.75.75 0 0 0 1.28-.53v-2.39l.33-.026c1.542-.125 2.67-1.433 2.67-2.94v-4.286c0-1.505-1.125-2.811-2.664-2.94A49.392 49.392 0 0 0 15.75 7.5Z" />
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
             </svg>
-            <p className="text-xl font-light">Select a chat to start messaging</p>
+            <p className="text-lg font-light">Select a chat to start messaging</p>
           </div>
         ) : (
           <div className="flex justify-center items-center h-full text-gray-500">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-600"></div>
+            <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent"></div>
           </div>
         )}
       </div>
 
       {/* Right Panel - AI Assistant */}
-      <div className="w-1/4 flex flex-col bg-white border-l border-gray-200">
-        <div className="p-4 bg-[#f0f2f5] border-b border-gray-200 flex justify-between items-center">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-800">AI Assistant</h2>
-            {selectedChat && currentAiConversation.totalQuestions > 0 && (
-              <div className="text-sm text-gray-600 flex items-center space-x-2">
-                <span>{currentAiConversation.totalQuestions} questions asked</span>
-                {currentAiConversation.errorCount > 0 && (
-                  <span className="text-red-500">({currentAiConversation.errorCount} errors)</span>
-                )}
-              </div>
-            )}
+      <div className="min-w-[320px] max-w-[400px] w-[30%] flex flex-col bg-[#f7f8fa] border-l border-gray-200">
+        <div className="px-4 py-3 bg-white border-b border-gray-200 flex justify-between items-center">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-4-8c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1zm4 0c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1zm4 0c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1z"/>
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-[16px] font-medium text-gray-800">AI Assistant</h2>
+              {selectedChat && currentAiConversation.totalQuestions > 0 && (
+                <div className="text-[13px] text-gray-500 flex items-center space-x-2">
+                  <span>{currentAiConversation.totalQuestions} questions asked</span>
+                  {currentAiConversation.errorCount > 0 && (
+                    <span className="text-red-500">({currentAiConversation.errorCount} errors)</span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           {currentAiConversation.messages.length > 0 && (
             <button
               onClick={clearAiHistory}
-              className="text-gray-500 hover:text-gray-700 transition-colors duration-200"
+              className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
               title="Clear history"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
               </svg>
             </button>
@@ -1000,9 +1206,9 @@ const WhatsAppWebPage = () => {
         </div>
 
         {aiError && (
-          <div className="px-4 py-2 bg-red-50 border-b border-red-100 animate-fade-in">
+          <div className="px-4 py-2 bg-red-50 border-b border-red-100">
             <p className="text-sm text-red-600 flex items-center">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
               </svg>
               {aiError}
@@ -1012,126 +1218,133 @@ const WhatsAppWebPage = () => {
 
         <div 
           ref={aiMessagesContainerRef}
-          className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50"
+          className="flex-1 overflow-y-auto p-4 bg-[#f7f8fa]"
         >
-          {!selectedChat ? (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              <p>Select a chat to start asking questions</p>
-            </div>
-          ) : currentAiConversation.messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              <div className="text-center">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-12 w-12 mx-auto mb-4 text-gray-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-                  />
-                </svg>
-                <p className="text-sm">Ask me anything about this conversation!</p>
-                <p className="text-xs text-gray-400 mt-2">I'll analyze the chat history to help you</p>
-              </div>
-            </div>
-          ) : (
-            currentAiConversation.messages.map((msg) => (
-              <div key={msg.id} className="space-y-2 animate-fade-in">
-                <div className="flex justify-end">
-                  <div className="bg-blue-100 rounded-lg p-3 max-w-[85%] transform transition-all duration-200 hover:scale-[1.02]">
-                    <p className="text-blue-800 whitespace-pre-wrap break-words">
-                      {msg.question}
-                    </p>
-                    <p className="text-xs text-blue-600/70 mt-1">
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex justify-start">
-                  <div className={`rounded-lg p-3 max-w-[85%] transform transition-all duration-200 hover:scale-[1.02] ${
-                    msg.status === 'error' ? 'bg-red-50' : 'bg-gray-100'
-                  }`}>
-                    {msg.status === 'pending' ? (
-                      <div className="flex items-center space-x-2 p-2">
-                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent"></div>
-                        <p className="text-gray-600">Analyzing conversation...</p>
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="text-gray-800 whitespace-pre-wrap break-words">
-                          {msg.answer}
+          {selectedChat ? (
+            <>
+              {currentAiConversation.messages.map((msg) => (
+                <div key={msg.id} className="mb-4">
+                  <div className="flex flex-col space-y-2">
+                    <div className="flex justify-end">
+                      <div className="max-w-[85%] bg-blue-50 rounded-lg px-3 py-2 shadow-sm">
+                        <p className="text-[14px] text-gray-800">{msg.question}</p>
+                        <p className="text-xs text-gray-500 text-right mt-1">
+                          {new Date(msg.timestamp).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit"
+                          })}
                         </p>
-                        {msg.error && (
-                          <div className="mt-2 p-2 bg-red-100 rounded text-sm text-red-600">
-                            {msg.error}
-                          </div>
-                        )}
-                        {msg.metadata && (
-                          <div className="mt-2 text-xs text-gray-400 space-y-1 border-t border-gray-200 pt-2">
-                            <div className="flex items-center justify-between">
-                              <span>Response time: {formatProcessingTime(msg.metadata.processingTime)}</span>
-                              <span>Confidence: {formatConfidence(msg.metadata.confidence)}</span>
+                      </div>
+                    </div>
+                    {msg.status === 'complete' && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                          <p className="text-[14px] text-gray-800 whitespace-pre-wrap">{msg.answer}</p>
+                          {msg.metadata && (
+                            <div className="mt-2 pt-2 border-t border-gray-100">
+                              <div className="flex items-center justify-between text-xs text-gray-500">
+                                <span>Processing: {formatProcessingTime(msg.metadata.processingTime)}</span>
+                                <span>Confidence: {formatConfidence(msg.metadata.confidence)}</span>
+                              </div>
+                              {msg.metadata.relevantDates.length > 0 && (
+                                <div className="mt-1 text-xs text-gray-500">
+                                  <span>Relevant dates: {msg.metadata.relevantDates.join(", ")}</span>
+                                </div>
+                              )}
                             </div>
-                            {msg.contextSize && (
-                              <p>Based on {msg.contextSize} messages</p>
-                            )}
-                            {msg.metadata.relevantDates && msg.metadata.relevantDates.length > 0 && (
-                              <p>Relevant dates: {msg.metadata.relevantDates.join(", ")}</p>
-                            )}
+                          )}
+                          <p className="text-xs text-gray-500 text-right mt-1">
+                            {new Date(msg.timestamp).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit"
+                            })}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {msg.status === 'pending' && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                          <div className="flex items-center space-x-1">
+                            <div className="animate-pulse flex space-x-1">
+                              <div className="h-2 w-2 bg-blue-500 rounded-full"></div>
+                              <div className="h-2 w-2 bg-blue-500 rounded-full animation-delay-200"></div>
+                              <div className="h-2 w-2 bg-blue-500 rounded-full animation-delay-400"></div>
+                            </div>
                           </div>
-                        )}
+                        </div>
+                      </div>
+                    )}
+                    {msg.status === 'error' && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[85%] bg-red-50 rounded-lg px-3 py-2 shadow-sm">
+                          <p className="text-[14px] text-red-600">{msg.error}</p>
+                          <p className="text-xs text-red-500 text-right mt-1">
+                            {new Date(msg.timestamp).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit"
+                            })}
+                          </p>
+                        </div>
                       </div>
                     )}
                   </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+              </svg>
+              <p className="text-lg font-light">Select a chat to start AI analysis</p>
+            </div>
           )}
         </div>
 
-        <div className="p-4 bg-white border-t border-gray-200">
-          <div className="flex items-center space-x-2">
-            <div className="relative flex-1">
+        <div className="p-3 bg-white border-t border-gray-200">
+          <div className="flex items-center space-x-2 bg-[#f7f8fa] px-4 py-3 rounded-lg">
+            <div className="flex-1">
               <textarea
                 value={aiQuery}
                 onChange={(e) => setAiQuery(e.target.value)}
                 onKeyPress={handleAiKeyPress}
-                placeholder={selectedChat ? "Ask about this conversation..." : "Select a chat first"}
+                placeholder="Ask about the conversation..."
                 disabled={!selectedChat || isAiLoading}
-                className={`w-full bg-gray-100 text-gray-800 placeholder-gray-500 px-4 py-2 pr-10 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 transition-all duration-200 ${
-                  isAiLoading ? 'opacity-50' : ''
+                className={`w-full bg-transparent text-gray-800 placeholder-gray-500 resize-none focus:outline-none min-h-[24px] max-h-[100px] text-[14px] ${
+                  !selectedChat ? "cursor-not-allowed" : ""
                 }`}
                 rows={1}
               />
-              {isAiLoading && (
-                <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-600 border-t-transparent"></div>
-                </div>
-              )}
             </div>
-            <button
-              onClick={sendAiQuery}
-              disabled={!selectedChat || !aiQuery.trim() || isAiLoading}
-              className={`p-2 rounded-full transition-all duration-200 ${
-                selectedChat && aiQuery.trim() && !isAiLoading
-                  ? "bg-blue-500 hover:bg-blue-600 text-white transform hover:scale-105"
-                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
-              }`}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                className="w-5 h-5"
+            {!aiQuery.trim() ? (
+              <button 
+                className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                disabled={!selectedChat}
               >
-                <path d="M3.478 2.404a.75.75 0 00-.926.941l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.404z" />
-              </svg>
-            </button>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                onClick={sendAiQuery}
+                disabled={!selectedChat || isAiLoading || !aiQuery.trim()}
+                className={`p-2 rounded-full transition-colors duration-200 ${
+                  !selectedChat || isAiLoading
+                    ? "bg-gray-200 cursor-not-allowed"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                }`}
+              >
+                {isAiLoading ? (
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </button>
+            )}
           </div>
         </div>
       </div>
