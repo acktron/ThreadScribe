@@ -769,6 +769,22 @@ const WhatsAppWebPage = () => {
     }
   }, [connected, chatHistory]);
 
+  // Filter chats to show only those with messages and matching search query
+  const filteredChats = chats
+    .filter(chat => {
+      // First filter for chats with messages
+      const hasMessages = chatHistory[chat.jid]?.length > 0;
+      const hasLastMessage = !!chat.lastMessage;
+      const hasActivity = hasMessages || hasLastMessage;
+
+      // Then filter by search query
+      const matchesSearch = chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          chat.phoneNumber.toLowerCase().includes(searchQuery.toLowerCase());
+
+      return hasActivity && matchesSearch;
+    })
+    .sort((a, b) => b.timestampDate.getTime() - a.timestampDate.getTime());
+
   const sendMessage = async () => {
     if (!selectedChat || !newMsg.trim()) {
       console.error("Cannot send message: No chat selected or empty message");
@@ -870,10 +886,6 @@ const WhatsAppWebPage = () => {
     }
   };
 
-  const filteredChats = chats.filter(chat => 
-    chat.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
   const handleAiKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -938,7 +950,15 @@ const WhatsAppWebPage = () => {
               </div>
             </div>
           )}
-          {connected && (
+          {connected && filteredChats.length === 0 && (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-gray-500 text-sm text-center">
+                <p>No active chats</p>
+                <p className="text-xs mt-1">Chats will appear here when you receive messages</p>
+              </div>
+            </div>
+          )}
+          {connected && filteredChats.length > 0 && (
             <div className="divide-y divide-gray-100">
               {filteredChats.map((chat) => (
                 <button
