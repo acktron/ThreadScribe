@@ -127,6 +127,7 @@ def format_chat_context(messages):
             except (ValueError, AttributeError):
                 logger.error(f"Could not parse timestamp: {ts}")
                 return 0
+                return 0
     
     messages.sort(key=lambda x: parse_timestamp(x["timestamp"]))
     
@@ -139,6 +140,7 @@ def format_chat_context(messages):
             message_date = timestamp.strftime('%Y-%m-%d')
             
             # Add date header if it's a new date
+
             if message_date != current_date:
                 if current_date is not None:
                     formatted_text += "\n"
