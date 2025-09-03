@@ -1,54 +1,117 @@
-# React + TypeScript + Vite
+# ThreadScribe 📖✨
+**Summarize and analyze your WhatsApp conversations with ease.**
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+ThreadScribe is an AI-powered tool that helps you upload or stream WhatsApp chats and automatically generates:  
+- 📑 **Summaries** of long conversations  
+- ✅ **Checklists** for action items  
+- 📝 **Decisions & Agreements** made in chat  
+- ❓ **Open Questions** that need follow-up  
 
-Currently, two official plugins are available:
+Perfect for students, teams, and professionals who want to stay organized without scrolling through endless chats.  
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## Expanding the ESLint configuration
+## 🚀 Features  
+- **Upload Chat** – Import exported WhatsApp `.txt` chat files.  
+- **Live Chat (MCP)** – Connect with WhatsApp via MCP bridge for real-time conversation processing.  
+- **AI-Powered Summarization** – Generate structured summaries, decisions, questions, and tasks.  
+- **Interactive Dashboard** – View results in cards with checklists, summaries, and filters.  
+- **Fast & Secure** – Proxy-based backend (FastAPI) ensures safe communication with MCP.  
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+## 🏗️ Architecture  
+```
+Frontend (React + Tailwind + React Router)
+        |
+        v
+Backend Proxy (FastAPI)
+        |
+        v
+WhatsApp MCP Server (Go-based bridge + FastAPI)
+        |
+        v
+AI Summarization Engine (LLMs, Hugging Face/Open Source models)
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+---
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## ⚡ Tech Stack  
+- **Frontend:** React, TypeScript, Vite, TailwindCSS, Shadcn UI  
+- **Backend:** FastAPI (Python)  
+- **MCP:** Go-based WhatsApp bridge + FastAPI MCP server  
+- **AI:** Hugging Face / Open-source LLMs  
+- **Hosting:** AWS EC2 (for backend), Vercel/Netlify (for frontend)  
 
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
+---
+
+## 📂 Project Structure  
 ```
+ThreadScribe/
+├── frontend/           # React + Tailwind frontend
+│   ├── pages/UploadPage/
+│   │   ├── LandingPage.tsx
+│   │   ├── UploadPage.tsx
+│   │   ├── ResultPage.tsx
+│   └── ...
+├── backend/            # FastAPI backend
+│   ├── main.py
+│   ├── routes/
+│   └── utils/
+├── mcp-server/         # WhatsApp MCP bridge (Go + FastAPI)
+└── README.md
+```
+
+---
+
+## ⚙️ Installation  
+
+### 1. Clone Repo  
+```bash
+git clone https://github.com/your-username/threadscribe.git
+cd threadscribe
+```
+
+### 2. Backend Setup (FastAPI)  
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+### 3. Frontend Setup (React + Vite + Tailwind)  
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### 4. MCP Server Setup  
+- Install Go & Python dependencies  
+- Run MCP bridge for WhatsApp live chat  
+
+---
+
+## 🖥️ Usage  
+1. Start backend (`FastAPI` on port 8000).  
+2. Start frontend (`npm run dev`).  
+3. Choose **Upload Chat** or **Live Chat** on landing page.  
+4. Get structured summaries, checklists, and decisions instantly.  
+
+---
+
+## 🔮 Roadmap  
+- [ ] Multi-language support  
+- [ ] Integration with Slack & Telegram  
+- [ ] Export results as PDF/Markdown  
+- [ ] Smart search across conversations  
+
+---
+
+## 🤝 Contributing  
+Pull requests are welcome! For major changes, open an issue first to discuss what you’d like to change.  
+
+---
+
+## 📜 License  
+MIT License © 2025 Abhinav Kumar  
