@@ -932,25 +932,40 @@ const WhatsAppWebPage = () => {
         <div className="min-w-[280px] max-w-[420px] w-[30%] flex flex-col bg-white border-r border-gray-200">
           {/* Header */}
           <div className="px-4 py-3 bg-white border-b border-gray-200">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
-                </svg>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="flex-1 flex items-center justify-between">
+                  <h2 className="text-[16px] font-medium text-gray-800">Messages</h2>
+                  <button
+                    onClick={handleLogout}
+                    className="ml-2 px-3 py-1 rounded-lg bg-red-500 text-white text-xs hover:bg-red-600 transition-colors flex items-center gap-1"
+                    title="Logout"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                      <polyline points="16 17 21 12 16 7" />
+                      <line x1="21" y1="12" x2="9" y2="12" />
+                    </svg>
+                    <span>Logout</span>
+                  </button>
+                </div>
               </div>
-              <div className="flex-1 flex items-center justify-between">
-                <h2 className="text-[16px] font-medium text-gray-800">Messages</h2>
+              <div className="flex items-center">
                 <button
-                  onClick={handleLogout}
-                  className="ml-2 px-3 py-1 rounded-lg bg-red-500 text-white text-xs hover:bg-red-600 transition-colors flex items-center gap-1"
-                  title="Logout"
+                  onClick={() => { window.location.href = "http://localhost:5173/"; }}
+                  className="px-3 py-1 rounded-lg bg-gray-200 text-gray-700 text-sm hover:bg-gray-300 transition-colors flex items-center gap-1"
+                  title="Back"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                    <polyline points="16 17 21 12 16 7" />
-                    <line x1="21" y1="12" x2="9" y2="12" />
+                    <polyline points="15 18 9 12 15 6" />
+                    <line x1="9" y1="12" x2="21" y2="12" />
                   </svg>
-                  <span>Logout</span>
+                  <span>Back</span>
                 </button>
               </div>
             </div>
