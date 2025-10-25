@@ -89,6 +89,24 @@ interface AIConversationState {
   errorCount: number;
 }
 
+// Chat Analysis specific interfaces
+interface ChatAnalysisMessage {
+  id: string;
+  question: string;
+  answer: string;
+  timestamp: number;
+  error?: string;
+  status: 'pending' | 'complete' | 'error';
+  isContactSpecific: boolean;
+}
+
+interface ChatAnalysisState {
+  messages: ChatAnalysisMessage[];
+  lastUpdated: number;
+  totalQuestions: number;
+  errorCount: number;
+}
+
 interface ContactInfo {
   name: string;
   phoneNumber: string;
@@ -165,6 +183,14 @@ const WhatsAppWebPage = () => {
   const aiMessagesContainerRef = useRef<HTMLDivElement>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const queryStartTime = useRef<number | null>(null);
+
+  // Chat Analysis state
+  const [chatAnalysisConversations, setChatAnalysisConversations] = useState<Record<string, ChatAnalysisState>>({});
+  const [chatAnalysisQuery, setChatAnalysisQuery] = useState("");
+  const [isChatAnalysisLoading, setIsChatAnalysisLoading] = useState(false);
+  const chatAnalysisMessagesContainerRef = useRef<HTMLDivElement>(null);
+  const [chatAnalysisError, setChatAnalysisError] = useState<string | null>(null);
+  const chatAnalysisQueryStartTime = useRef<number | null>(null);
 
   // Initialize QR code instance
   useEffect(() => {
@@ -486,6 +512,177 @@ const WhatsAppWebPage = () => {
     totalQuestions: 0,
     errorCount: 0,
   };
+
+  // Chat Analysis functions
+  const updateChatAnalysisConversation = (
+    jid: string,
+    updater: (prev: ChatAnalysisState) => ChatAnalysisState
+  ) => {
+    setChatAnalysisConversations(prev => ({
+      ...prev,
+      [jid]: updater(prev[jid] || {
+        messages: [],
+        lastUpdated: Date.now(),
+        totalQuestions: 0,
+        errorCount: 0,
+      }),
+    }));
+  };
+
+  const getCurrentChatAnalysisConversation = () => {
+    return selectedChat ? chatAnalysisConversations[selectedChat] || {
+      messages: [],
+      lastUpdated: 0,
+      totalQuestions: 0,
+      errorCount: 0,
+    } : {
+      messages: [],
+      lastUpdated: 0,
+      totalQuestions: 0,
+      errorCount: 0,
+    };
+  };
+
+  const formatChatHistoryForAnalysis = (messages: Message[]): string => {
+    return messages
+      .map(msg => {
+        const timestamp = new Date(msg.timestamp).toLocaleString();
+        const sender = msg.fromMe ? "You" : "Contact";
+        return `${timestamp} - ${sender}: ${msg.text}`;
+      })
+      .join('\n');
+  };
+
+  const isContactSpecificQuery = (query: string): boolean => {
+    const contactSpecificKeywords = [
+      'we discussed', 'our conversation', 'our chat', 'our messages',
+      'yesterday', 'today', 'last week', 'recently', 'earlier',
+      'how many messages', 'what did we talk about', 'what did we discuss',
+      'sentiment', 'tone', 'mood', 'emotion', 'feeling',
+      'decision', 'agreement', 'plan', 'schedule', 'meeting',
+      'this contact', 'this person', 'this chat', 'this conversation'
+    ];
+    
+    const lowerQuery = query.toLowerCase();
+    return contactSpecificKeywords.some(keyword => lowerQuery.includes(keyword));
+  };
+
+  const sendChatAnalysisQuery = async () => {
+    if (!selectedChat || !chatAnalysisQuery.trim()) return;
+
+    const trimmedQuery = chatAnalysisQuery.trim();
+    const isContactSpecific = isContactSpecificQuery(trimmedQuery);
+    chatAnalysisQueryStartTime.current = Date.now();
+    
+    const newMessage: ChatAnalysisMessage = {
+      id: `chat-analysis-${Date.now()}`,
+      question: trimmedQuery,
+      answer: "",
+      timestamp: Date.now(),
+      status: 'pending',
+      isContactSpecific,
+    };
+
+    setChatAnalysisError(null);
+    updateChatAnalysisConversation(selectedChat, prev => ({
+      ...prev,
+      messages: [...prev.messages, newMessage],
+      lastUpdated: Date.now(),
+      totalQuestions: prev.totalQuestions + 1,
+    }));
+
+    setChatAnalysisQuery("");
+    setIsChatAnalysisLoading(true);
+
+    try {
+      let requestBody: any = {
+        query: trimmedQuery,
+      };
+
+      // If it's a contact-specific query, include chat history
+      if (isContactSpecific && selectedChat) {
+        const contactMessages = chatHistory[selectedChat] || [];
+        if (contactMessages.length > 0) {
+          requestBody.chat_data = formatChatHistoryForAnalysis(contactMessages);
+        }
+      }
+
+      const response = await axios.post("http://localhost:8000/api/chat", requestBody);
+
+      const processingTime = Date.now() - (chatAnalysisQueryStartTime.current || Date.now());
+      
+      updateChatAnalysisConversation(selectedChat, prev => ({
+        ...prev,
+        messages: prev.messages.map(msg =>
+          msg.id === newMessage.id
+            ? {
+                ...msg,
+                answer: response.data.answer,
+                status: 'complete',
+              }
+            : msg
+        ),
+      }));
+
+      // Scroll to bottom with smooth animation
+      requestAnimationFrame(() => {
+        if (chatAnalysisMessagesContainerRef.current) {
+          chatAnalysisMessagesContainerRef.current.scrollTo({
+            top: chatAnalysisMessagesContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      });
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.response?.data?.error || "Failed to get a response. Please try again.";
+      
+      updateChatAnalysisConversation(selectedChat, prev => ({
+        ...prev,
+        messages: prev.messages.map(msg =>
+          msg.id === newMessage.id
+            ? {
+                ...msg,
+                answer: "I encountered an error while processing your question.",
+                error: errorMessage,
+                status: 'error',
+              }
+            : msg
+        ),
+        errorCount: prev.errorCount + 1,
+      }));
+      
+      setChatAnalysisError(errorMessage);
+    } finally {
+      setIsChatAnalysisLoading(false);
+    }
+  };
+
+  const clearChatAnalysisHistory = () => {
+    if (selectedChat) {
+      setChatAnalysisConversations(prev => {
+        const newConversations = { ...prev };
+        delete newConversations[selectedChat];
+        return newConversations;
+      });
+    }
+  };
+
+  const handleChatAnalysisKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChatAnalysisQuery();
+    }
+  };
+
+  // Helper functions for AI Assistant (moved from earlier in file)
+  // const formatProcessingTime = (time: number): string => {
+  //   if (time < 1000) return `${time}ms`;
+  //   return `${(time / 1000).toFixed(1)}s`;
+  // };
+
+  // const formatConfidence = (confidence: number): string => {
+  //   return `${Math.round(confidence * 100)}%`;
+  // };
 
   // Format timestamp for chat list
   const formatTimestamp = (timestamp: string | Date): string => {
@@ -1233,88 +1430,65 @@ const WhatsAppWebPage = () => {
           )}
         </div>
 
-        {/* Right Panel - AI Assistant */}
+        {/* Right Panel - AI Assistant & Chat Analysis */}
         <div className="min-w-[320px] max-w-[400px] w-[30%] flex flex-col bg-[#f7f8fa] border-l border-gray-200">
-          <div className="px-4 py-3 bg-white border-b border-gray-200 flex justify-between items-center">
-            <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-4-8c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1zm4 0c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1z"/>
-                </svg>
+          {/* AI Assistant Section */}
+          <div className="flex-1 flex flex-col">
+            <div className="px-4 py-3 bg-white border-b border-gray-200 flex justify-between items-center">
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-4-8c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1zm4 0c0-.55.45-1 1-1s1 .45 1 1-.45 1-1 1-1-.45-1-1z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-[16px] font-medium text-gray-800">AI Assistant</h2>
+                  {selectedChat && currentAiConversation.totalQuestions > 0 && (
+                    <div className="text-[13px] text-gray-500 flex items-center space-x-2">
+                      <span>{currentAiConversation.totalQuestions} questions asked</span>
+                      {currentAiConversation.errorCount > 0 && (
+                        <span className="text-red-500">({currentAiConversation.errorCount} errors)</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div>
-                <h2 className="text-[16px] font-medium text-gray-800">AI Assistant</h2>
-                {selectedChat && currentAiConversation.totalQuestions > 0 && (
-                  <div className="text-[13px] text-gray-500 flex items-center space-x-2">
-                    <span>{currentAiConversation.totalQuestions} questions asked</span>
-                    {currentAiConversation.errorCount > 0 && (
-                      <span className="text-red-500">({currentAiConversation.errorCount} errors)</span>
-                    )}
-                  </div>
-                )}
-              </div>
+              {currentAiConversation.messages.length > 0 && (
+                <button
+                  onClick={clearAiHistory}
+                  className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                  title="Clear history"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              )}
             </div>
-            {currentAiConversation.messages.length > 0 && (
-              <button
-                onClick={clearAiHistory}
-                className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
-                title="Clear history"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-              </button>
+
+            {aiError && (
+              <div className="px-4 py-2 bg-red-50 border-b border-red-100">
+                <p className="text-sm text-red-600 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  {aiError}
+                </p>
+              </div>
             )}
-          </div>
 
-          {aiError && (
-            <div className="px-4 py-2 bg-red-50 border-b border-red-100">
-              <p className="text-sm text-red-600 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
-                {aiError}
-              </p>
-            </div>
-          )}
-
-          <div 
-            ref={aiMessagesContainerRef}
-            className="flex-1 overflow-y-auto p-4 bg-[#f7f8fa]"
-          >
-            {selectedChat ? (
-              <>
-                {currentAiConversation.messages.map((msg) => (
-                  <div key={msg.id} className="mb-4">
-                    <div className="flex flex-col space-y-2">
-                      <div className="flex justify-end">
-                        <div className="max-w-[85%] bg-blue-50 rounded-lg px-3 py-2 shadow-sm">
-                          <p className="text-[14px] text-gray-800">{msg.question}</p>
-                          <p className="text-xs text-gray-500 text-right mt-1">
-                            {new Date(msg.timestamp).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit"
-                            })}
-                          </p>
-                        </div>
-                      </div>
-                      {msg.status === 'complete' && (
-                        <div className="flex justify-start">
-                          <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
-                            <p className="text-[14px] text-gray-800 whitespace-pre-wrap">{msg.answer}</p>
-                            {msg.metadata && (
-                              <div className="mt-2 pt-2 border-t border-gray-100">
-                                <div className="flex items-center justify-between text-xs text-gray-500">
-                                  <span>Processing: {formatProcessingTime(msg.metadata.processingTime)}</span>
-                                  <span>Confidence: {formatConfidence(msg.metadata.confidence)}</span>
-                                </div>
-                                {msg.metadata.relevantDates.length > 0 && (
-                                  <div className="mt-1 text-xs text-gray-500">
-                                    <span>Relevant dates: {msg.metadata.relevantDates.join(", ")}</span>
-                                  </div>
-                                )}
-                              </div>
-                            )}
+            <div 
+              ref={aiMessagesContainerRef}
+              className="flex-1 overflow-y-auto p-4 bg-[#f7f8fa]"
+            >
+              {selectedChat ? (
+                <>
+                  {currentAiConversation.messages.map((msg) => (
+                    <div key={msg.id} className="mb-4">
+                      <div className="flex flex-col space-y-2">
+                        <div className="flex justify-end">
+                          <div className="max-w-[85%] bg-blue-50 rounded-lg px-3 py-2 shadow-sm">
+                            <p className="text-[14px] text-gray-800">{msg.question}</p>
                             <p className="text-xs text-gray-500 text-right mt-1">
                               {new Date(msg.timestamp).toLocaleTimeString([], {
                                 hour: "2-digit",
@@ -1323,90 +1497,306 @@ const WhatsAppWebPage = () => {
                             </p>
                           </div>
                         </div>
-                      )}
-                      {msg.status === 'pending' && (
-                        <div className="flex justify-start">
-                          <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
-                            <div className="flex items-center space-x-1">
-                              <div className="animate-pulse flex space-x-1">
-                                <div className="h-2 w-2 bg-blue-500 rounded-full"></div>
-                                <div className="h-2 w-2 bg-blue-500 rounded-full animation-delay-200"></div>
-                                <div className="h-2 w-2 bg-blue-500 rounded-full animation-delay-400"></div>
+                        {msg.status === 'complete' && (
+                          <div className="flex justify-start">
+                            <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                              <p className="text-[14px] text-gray-800 whitespace-pre-wrap">{msg.answer}</p>
+                              {msg.metadata && (
+                                <div className="mt-2 pt-2 border-t border-gray-100">
+                                  <div className="flex items-center justify-between text-xs text-gray-500">
+                                    <span>Processing: {formatProcessingTime(msg.metadata.processingTime)}</span>
+                                    <span>Confidence: {formatConfidence(msg.metadata.confidence)}</span>
+                                  </div>
+                                  {msg.metadata.relevantDates.length > 0 && (
+                                    <div className="mt-1 text-xs text-gray-500">
+                                      <span>Relevant dates: {msg.metadata.relevantDates.join(", ")}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              <p className="text-xs text-gray-500 text-right mt-1">
+                                {new Date(msg.timestamp).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit"
+                                })}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                        {msg.status === 'pending' && (
+                          <div className="flex justify-start">
+                            <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                              <div className="flex items-center space-x-1">
+                                <div className="animate-pulse flex space-x-1">
+                                  <div className="h-2 w-2 bg-blue-500 rounded-full"></div>
+                                  <div className="h-2 w-2 bg-blue-500 rounded-full animation-delay-200"></div>
+                                  <div className="h-2 w-2 bg-blue-500 rounded-full animation-delay-400"></div>
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </div>
-                      )}
-                      {msg.status === 'error' && (
-                        <div className="flex justify-start">
-                          <div className="max-w-[85%] bg-red-50 rounded-lg px-3 py-2 shadow-sm">
-                            <p className="text-[14px] text-red-600">{msg.error}</p>
-                            <p className="text-xs text-red-500 text-right mt-1">
-                              {new Date(msg.timestamp).toLocaleTimeString([], {
-                                hour: "2-digit",
-                                minute: "2-digit"
-                              })}
-                            </p>
+                        )}
+                        {msg.status === 'error' && (
+                          <div className="flex justify-start">
+                            <div className="max-w-[85%] bg-red-50 rounded-lg px-3 py-2 shadow-sm">
+                              <p className="text-[14px] text-red-600">{msg.error}</p>
+                              <p className="text-xs text-red-500 text-right mt-1">
+                                {new Date(msg.timestamp).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit"
+                                })}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                </svg>
-                <p className="text-lg font-light">Select a chat to start AI analysis</p>
-              </div>
-            )}
-          </div>
-
-          <div className="p-3 bg-white border-t border-gray-200">
-            <div className="flex items-center space-x-2 bg-[#f7f8fa] px-4 py-3 rounded-lg">
-              <div className="flex-1">
-                <textarea
-                  value={aiQuery}
-                  onChange={(e) => setAiQuery(e.target.value)}
-                  onKeyPress={handleAiKeyPress}
-                  placeholder="Ask about the conversation..."
-                  disabled={!selectedChat || isAiLoading}
-                  className={`w-full bg-transparent text-gray-800 placeholder-gray-500 resize-none focus:outline-none min-h-[24px] max-h-[100px] text-[14px] ${
-                    !selectedChat ? "cursor-not-allowed" : ""
-                  }`}
-                  rows={1}
-                />
-              </div>
-              {!aiQuery.trim() ? (
-                <button 
-                  className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
-                  disabled={!selectedChat}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                  ))}
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
                   </svg>
-                </button>
-              ) : (
-                <button
-                  onClick={sendAiQuery}
-                  disabled={!selectedChat || isAiLoading || !aiQuery.trim()}
-                  className={`p-2 rounded-full transition-colors duration-200 ${
-                    !selectedChat || isAiLoading
-                      ? "bg-gray-200 cursor-not-allowed"
-                      : "bg-blue-600 hover:bg-blue-700 text-white"
-                  }`}
-                >
-                  {isAiLoading ? (
-                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                  <p className="text-lg font-light">Select a chat to start AI analysis</p>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-white border-t border-gray-200">
+              <div className="flex items-center space-x-2 bg-[#f7f8fa] px-4 py-3 rounded-lg">
+                <div className="flex-1">
+                  <textarea
+                    value={aiQuery}
+                    onChange={(e) => setAiQuery(e.target.value)}
+                    onKeyPress={handleAiKeyPress}
+                    placeholder="Ask about the conversation..."
+                    disabled={!selectedChat || isAiLoading}
+                    className={`w-full bg-transparent text-gray-800 placeholder-gray-500 resize-none focus:outline-none min-h-[24px] max-h-[100px] text-[14px] ${
+                      !selectedChat ? "cursor-not-allowed" : ""
+                    }`}
+                    rows={1}
+                  />
+                </div>
+                {!aiQuery.trim() ? (
+                  <button 
+                    className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                    disabled={!selectedChat}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
                     </svg>
+                  </button>
+                ) : (
+                  <button
+                    onClick={sendAiQuery}
+                    disabled={!selectedChat || isAiLoading || !aiQuery.trim()}
+                    className={`p-2 rounded-full transition-colors duration-200 ${
+                      !selectedChat || isAiLoading
+                        ? "bg-gray-200 cursor-not-allowed"
+                        : "bg-blue-600 hover:bg-blue-700 text-white"
+                    }`}
+                  >
+                    {isAiLoading ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Chat Analysis Section */}
+          <div className="flex-1 flex flex-col border-t border-gray-200">
+            <div className="px-4 py-3 bg-white border-b border-gray-200 flex justify-between items-center">
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-[16px] font-medium text-gray-800">
+                    Chat Analysis
+                    {selectedChat && (() => {
+                      const chat = chats.find(c => c.jid === selectedChat);
+                      return chat ? `: ${chat.name}` : '';
+                    })()}
+                  </h2>
+                  {selectedChat && getCurrentChatAnalysisConversation().totalQuestions > 0 && (
+                    <div className="text-[13px] text-gray-500 flex items-center space-x-2">
+                      <span>{getCurrentChatAnalysisConversation().totalQuestions} questions asked</span>
+                      {getCurrentChatAnalysisConversation().errorCount > 0 && (
+                        <span className="text-red-500">({getCurrentChatAnalysisConversation().errorCount} errors)</span>
+                      )}
+                    </div>
                   )}
+                </div>
+              </div>
+              {getCurrentChatAnalysisConversation().messages.length > 0 && (
+                <button
+                  onClick={clearChatAnalysisHistory}
+                  className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                  title="Clear history"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
                 </button>
               )}
+            </div>
+
+            {chatAnalysisError && (
+              <div className="px-4 py-2 bg-red-50 border-b border-red-100">
+                <p className="text-sm text-red-600 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                  {chatAnalysisError}
+                </p>
+              </div>
+            )}
+
+            <div 
+              ref={chatAnalysisMessagesContainerRef}
+              className="flex-1 overflow-y-auto p-4 bg-[#f7f8fa]"
+            >
+              {selectedChat ? (
+                <>
+                  {getCurrentChatAnalysisConversation().messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mb-3 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                      </svg>
+                      <p className="text-sm text-center">
+                        Ask questions about this chat or anything else!
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1 text-center">
+                        Try: "What did we discuss yesterday?" or "How's the weather?"
+                      </p>
+                    </div>
+                  ) : (
+                    getCurrentChatAnalysisConversation().messages.map((msg) => (
+                      <div key={msg.id} className="mb-4">
+                        <div className="flex flex-col space-y-2">
+                          <div className="flex justify-end">
+                            <div className="max-w-[85%] bg-green-50 rounded-lg px-3 py-2 shadow-sm">
+                              <p className="text-[14px] text-gray-800">{msg.question}</p>
+                              <div className="flex items-center justify-between mt-1">
+                                <p className="text-xs text-gray-500">
+                                  {msg.isContactSpecific ? "Chat-specific" : "General"}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {new Date(msg.timestamp).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit"
+                                  })}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          {msg.status === 'complete' && (
+                            <div className="flex justify-start">
+                              <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                                <p className="text-[14px] text-gray-800 whitespace-pre-wrap">{msg.answer}</p>
+                                <p className="text-xs text-gray-500 text-right mt-1">
+                                  {new Date(msg.timestamp).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit"
+                                  })}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {msg.status === 'pending' && (
+                            <div className="flex justify-start">
+                              <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                                <div className="flex items-center space-x-1">
+                                  <div className="animate-pulse flex space-x-1">
+                                    <div className="h-2 w-2 bg-green-500 rounded-full"></div>
+                                    <div className="h-2 w-2 bg-green-500 rounded-full animation-delay-200"></div>
+                                    <div className="h-2 w-2 bg-green-500 rounded-full animation-delay-400"></div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {msg.status === 'error' && (
+                            <div className="flex justify-start">
+                              <div className="max-w-[85%] bg-red-50 rounded-lg px-3 py-2 shadow-sm">
+                                <p className="text-[14px] text-red-600">{msg.error}</p>
+                                <p className="text-xs text-red-500 text-right mt-1">
+                                  {new Date(msg.timestamp).toLocaleTimeString([], {
+                                    hour: "2-digit",
+                                    minute: "2-digit"
+                                  })}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mb-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                  </svg>
+                  <p className="text-lg font-light">Please select a contact from the Contacts Panel to start chat analysis</p>
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-white border-t border-gray-200">
+              <div className="flex items-center space-x-2 bg-[#f7f8fa] px-4 py-3 rounded-lg">
+                <div className="flex-1">
+                  <textarea
+                    value={chatAnalysisQuery}
+                    onChange={(e) => setChatAnalysisQuery(e.target.value)}
+                    onKeyPress={handleChatAnalysisKeyPress}
+                    placeholder="Ask about this chat or anything else..."
+                    disabled={!selectedChat || isChatAnalysisLoading}
+                    className={`w-full bg-transparent text-gray-800 placeholder-gray-500 resize-none focus:outline-none min-h-[24px] max-h-[100px] text-[14px] ${
+                      !selectedChat ? "cursor-not-allowed" : ""
+                    }`}
+                    rows={1}
+                  />
+                </div>
+                {!chatAnalysisQuery.trim() ? (
+                  <button 
+                    className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                    disabled={!selectedChat}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-600" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                ) : (
+                  <button
+                    onClick={sendChatAnalysisQuery}
+                    disabled={!selectedChat || isChatAnalysisLoading || !chatAnalysisQuery.trim()}
+                    className={`p-2 rounded-full transition-colors duration-200 ${
+                      !selectedChat || isChatAnalysisLoading
+                        ? "bg-gray-200 cursor-not-allowed"
+                        : "bg-green-600 hover:bg-green-700 text-white"
+                    }`}
+                  >
+                    {isChatAnalysisLoading ? (
+                      <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
