@@ -959,6 +959,19 @@ const WhatsAppLivePage: React.FC = () => {
         </div>
       </div>
 
+      {/* Info Banner */}
+      <div className="bg-blue-50 border-b border-blue-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
+          <div className="flex items-center space-x-3">
+            <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0" />
+            <div className="text-sm text-blue-800">
+              <span className="font-medium">Note:</span> Due to WhatsApp's API limitations, only messages received after connecting are available. 
+              For historical messages, use the <span className="font-medium">Upload WhatsApp Chat</span> feature.
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
