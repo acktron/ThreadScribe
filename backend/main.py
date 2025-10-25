@@ -28,12 +28,29 @@ app.add_middleware(
 # Configure Gemini AI (optional)
 try:
     import google.generativeai as genai
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel('gemini-pro')
+    api_key = os.getenv("GEMINI_API_KEY")
+    print(f"GEMINI_API_KEY loaded: {api_key[:10]}..." if api_key else "GEMINI_API_KEY not found")
+    genai.configure(api_key=api_key)
+    
+    # List available models for debugging (commented out for production)
+    # try:
+    #     models = genai.list_models()
+    #     print("Available models:")
+    #     for m in models:
+    #         if 'generateContent' in m.supported_generation_methods:
+    #             print(f"  - {m.name}")
+    # except Exception as e:
+    #     print(f"Could not list models: {e}")
+    
+    model = genai.GenerativeModel('gemini-2.0-flash')
     GEMINI_AVAILABLE = True
+    print("Gemini AI configured successfully")
 except ImportError:
     GEMINI_AVAILABLE = False
     print("Google Generative AI not available. Install with: pip install google-generativeai")
+except Exception as e:
+    GEMINI_AVAILABLE = False
+    print(f"Error configuring Gemini AI: {e}")
 
 # Initialize Hugging Face pipeline for text analysis (optional)
 try:
@@ -68,6 +85,7 @@ class ProcessedChat(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     chat_id: Optional[str] = None
+    chat_data: Optional[str] = None
 
 class QueryResponse(BaseModel):
     answer: str
@@ -294,11 +312,25 @@ async def chat_query(request: QueryRequest):
     """Answer questions about chat content using AI"""
     try:
         if GEMINI_AVAILABLE:
-            prompt = f"""
-            Answer this question about WhatsApp chat analysis: {request.query}
-            
-            Provide a helpful response based on common chat analysis patterns.
-            """
+            # Build context-aware prompt
+            if request.chat_data:
+                prompt = f"""
+                You are analyzing a WhatsApp chat conversation. Here is the chat data:
+
+                {request.chat_data[:8000]}  # Limit to avoid token limits
+
+                User Question: {request.query}
+
+                Please provide a detailed, helpful answer based on the actual chat content. 
+                If the question can't be answered from the chat data, say so clearly.
+                Focus on specific details from the conversation when possible.
+                """
+            else:
+                prompt = f"""
+                Answer this question about WhatsApp chat analysis: {request.query}
+                
+                Provide a helpful response based on common chat analysis patterns.
+                """
             
             response = model.generate_content(prompt)
             
@@ -309,13 +341,21 @@ async def chat_query(request: QueryRequest):
             )
         else:
             # Fallback response
-            return QueryResponse(
-                answer=f"I understand you're asking: '{request.query}'. This is a basic response since AI features are not fully configured. Please install google-generativeai for enhanced responses.",
-                sources=["ThreadScribe Basic Analysis"],
-                confidence=0.5
-            )
+            if request.chat_data:
+                return QueryResponse(
+                    answer=f"I understand you're asking: '{request.query}' about your chat data. This is a basic response since AI features are not fully configured. Please install google-generativeai for enhanced responses with chat context.",
+                    sources=["ThreadScribe Basic Analysis"],
+                    confidence=0.5
+                )
+            else:
+                return QueryResponse(
+                    answer=f"I understand you're asking: '{request.query}'. This is a basic response since AI features are not fully configured. Please install google-generativeai for enhanced responses.",
+                    sources=["ThreadScribe Basic Analysis"],
+                    confidence=0.5
+                )
         
     except Exception as e:
+        print(f"ERROR in chat_query: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
 
 @app.get("/api/whatsapp/status")

@@ -12,7 +12,11 @@ import {
   MessageSquare,
   TrendingUp,
   Users,
-  Calendar
+  Calendar,
+  Bot,
+  Send,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 
 interface ProcessedChat {
@@ -47,15 +51,104 @@ interface ProcessedChat {
   };
 }
 
+interface QueryMessage {
+  id: string;
+  question: string;
+  answer: string;
+  timestamp: Date;
+  isLoading?: boolean;
+  error?: string;
+}
+
 const ResultsPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { processedChat, fileName } = location.state as { 
+  const { processedChat, fileName, chatData } = location.state as { 
     processedChat: ProcessedChat; 
     fileName: string; 
+    chatData?: string;
   };
 
   const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'questions' | 'decisions' | 'sentiment'>('overview');
+  const [queryInput, setQueryInput] = useState('');
+  const [queryHistory, setQueryHistory] = useState<QueryMessage[]>([]);
+  const [isQueryLoading, setIsQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState('');
+
+  const handleQuerySubmit = async () => {
+    if (!queryInput.trim()) {
+      setQueryError('Please enter a question.');
+      return;
+    }
+
+    if (!chatData) {
+      setQueryError('Chat data not available for querying.');
+      return;
+    }
+
+    const queryId = Date.now().toString();
+    const newQuery: QueryMessage = {
+      id: queryId,
+      question: queryInput.trim(),
+      answer: '',
+      timestamp: new Date(),
+      isLoading: true
+    };
+
+    // Add loading query to history
+    setQueryHistory(prev => [...prev, newQuery]);
+    setQueryInput('');
+    setQueryError('');
+    setIsQueryLoading(true);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: queryInput.trim(),
+          chat_data: chatData
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      
+      // Update the query with the response
+      setQueryHistory(prev => 
+        prev.map(q => 
+          q.id === queryId 
+            ? { ...q, answer: result.answer, isLoading: false }
+            : q
+        )
+      );
+    } catch (error) {
+      console.error('Query error:', error);
+      
+      // Update the query with error
+      setQueryHistory(prev => 
+        prev.map(q => 
+          q.id === queryId 
+            ? { ...q, error: 'Failed to get response. Please try again.', isLoading: false }
+            : q
+        )
+      );
+    } finally {
+      setIsQueryLoading(false);
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleQuerySubmit();
+    }
+  };
 
   if (!processedChat) {
     return (
@@ -378,6 +471,151 @@ const ResultsPage = () => {
               </div>
             </div>
           )}
+        </motion.div>
+
+        {/* Ask Chat Questions Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.8 }}
+          className="mt-12"
+        >
+          <div className="card bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+            <div className="flex items-center mb-6">
+              <Bot className="w-6 h-6 text-blue-600 mr-3" />
+              <h2 className="text-2xl font-bold text-gray-900">Ask Chat Questions</h2>
+            </div>
+            
+            <p className="text-gray-600 mb-6">
+              Ask specific questions about your WhatsApp chat and get AI-powered insights based on the actual conversation content.
+            </p>
+
+            {/* Query Input */}
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Enter your question:
+                </label>
+                <div className="flex space-x-3">
+                  <textarea
+                    value={queryInput}
+                    onChange={(e) => setQueryInput(e.target.value)}
+                    onKeyPress={handleKeyPress}
+                    placeholder={chatData ? "e.g., What were the main decisions made? Who mentioned deadlines? What was the overall sentiment?" : "Please upload a chat file first to enable querying"}
+                    className={`flex-1 p-3 border rounded-lg focus:outline-none focus:ring-2 transition resize-none ${
+                      chatData 
+                        ? 'border-gray-300 focus:ring-blue-500' 
+                        : 'border-gray-200 bg-gray-50 text-gray-500'
+                    }`}
+                    rows={3}
+                    disabled={isQueryLoading || !chatData}
+                  />
+                  <motion.button
+                    onClick={handleQuerySubmit}
+                    disabled={isQueryLoading || !queryInput.trim() || !chatData}
+                    className={`px-6 py-3 rounded-lg font-medium transition flex items-center space-x-2 ${
+                      isQueryLoading || !queryInput.trim() || !chatData
+                        ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-700 text-white'
+                    }`}
+                    whileHover={!isQueryLoading && queryInput.trim() && chatData ? { scale: 1.02 } : {}}
+                    whileTap={!isQueryLoading && queryInput.trim() && chatData ? { scale: 0.98 } : {}}
+                  >
+                    {isQueryLoading ? (
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <Send className="w-5 h-5" />
+                    )}
+                    <span className="hidden sm:inline">
+                      {isQueryLoading ? 'Asking...' : 'Ask'}
+                    </span>
+                  </motion.button>
+                </div>
+              </div>
+
+              {queryError && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex items-center space-x-2 p-3 bg-red-50 border border-red-200 rounded-lg"
+                >
+                  <AlertCircle className="w-5 h-5 text-red-500" />
+                  <p className="text-red-600 text-sm">{queryError}</p>
+                </motion.div>
+              )}
+
+              {!chatData && (
+                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <AlertCircle className="w-5 h-5 text-yellow-600" />
+                    <div>
+                      <p className="text-yellow-800 text-sm font-medium">
+                        Chat data not available for querying
+                      </p>
+                      <p className="text-yellow-700 text-xs mt-1">
+                        Please go back to the upload page and re-upload your chat file to enable this feature.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Query History */}
+            {queryHistory.length > 0 && (
+              <div className="mt-8">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Query History</h3>
+                <div className="space-y-4 max-h-96 overflow-y-auto">
+                  {queryHistory.map((query) => (
+                    <motion.div
+                      key={query.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm"
+                    >
+                      {/* Question */}
+                      <div className="mb-3">
+                        <div className="flex items-start space-x-2">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full mt-2 flex-shrink-0"></div>
+                          <div className="flex-1">
+                            <p className="text-sm text-gray-600 mb-1">Your Question:</p>
+                            <p className="text-gray-900 font-medium">{query.question}</p>
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            {query.timestamp.toLocaleTimeString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Answer */}
+                      <div className="border-t pt-3">
+                        <div className="flex items-start space-x-2">
+                          <Bot className="w-4 h-4 text-blue-500 mt-1 flex-shrink-0" />
+                          <div className="flex-1">
+                            <p className="text-sm text-gray-600 mb-2">AI Response:</p>
+                            {query.isLoading ? (
+                              <div className="flex items-center space-x-2">
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                                <span className="text-gray-600">Thinking...</span>
+                              </div>
+                            ) : query.error ? (
+                              <div className="flex items-center space-x-2 text-red-600">
+                                <AlertCircle className="w-4 h-4" />
+                                <span className="text-sm">{query.error}</span>
+                              </div>
+                            ) : (
+                              <p className="text-gray-700 whitespace-pre-wrap">{query.answer}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </motion.div>
       </div>
     </div>

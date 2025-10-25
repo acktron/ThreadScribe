@@ -9,6 +9,11 @@ const UploadPage = () => {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [chatText, setChatText] = useState("");
+  const [query, setQuery] = useState("");
+  const [response, setResponse] = useState("");
+  const [isQueryLoading, setIsQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState("");
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -36,6 +41,19 @@ const UploadPage = () => {
     }
   };
 
+  const handleFileRead = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        setChatText(content);
+        resolve(content);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  };
+
   const handleUpload = async () => {
     if (!file) return;
 
@@ -50,11 +68,15 @@ const UploadPage = () => {
         },
       });
 
+      // Read file content for queries and wait for it to complete
+      const fileContent = await handleFileRead(file);
+
       // Navigate to results page with the processed data
       navigate('/results', { 
         state: { 
           processedChat: response.data,
-          fileName: file.name 
+          fileName: file.name,
+          chatData: fileContent
         } 
       });
     } catch (error) {
@@ -62,6 +84,46 @@ const UploadPage = () => {
       alert('Failed to process the chat file. Please try again.');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleQuery = async () => {
+    if (!query.trim()) {
+      setQueryError("Please enter your question.");
+      return;
+    }
+
+    if (!chatText.trim()) {
+      setQueryError("Please upload a chat file first before asking questions.");
+      return;
+    }
+
+    setIsQueryLoading(true);
+    setQueryError("");
+    setResponse("");
+
+    try {
+      const requestBody = {
+        query: query,
+        chat_data: chatText
+      };
+
+      const res = await axios.post("http://localhost:8000/api/chat", requestBody, {
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (res.data.answer) {
+        setResponse(res.data.answer);
+      } else {
+        setQueryError("No answer received from the server.");
+      }
+    } catch (error) {
+      console.error("Query error:", error);
+      setQueryError("Failed to get response. Please try again.");
+    } finally {
+      setIsQueryLoading(false);
     }
   };
 
@@ -210,6 +272,85 @@ const UploadPage = () => {
             </motion.button>
           </motion.div>
         </motion.div>
+
+        {/* Query Section */}
+        {file && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, delay: 0.5 }}
+            className="mt-8 max-w-2xl mx-auto"
+          >
+            <div className="card bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+              <div className="flex items-center mb-4">
+                <span className="text-2xl mr-3">🤖</span>
+                <h3 className="text-xl font-semibold text-gray-800">
+                  Ask Questions About Your Chat
+                </h3>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2 text-gray-700">
+                    Enter your question:
+                  </label>
+                  <textarea
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="e.g., What were the key decisions made? Who mentioned important deadlines? What was the main topic discussed?"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition resize-none"
+                    rows={3}
+                    disabled={isQueryLoading}
+                  />
+                </div>
+
+                {queryError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-red-600 text-sm">{queryError}</p>
+                  </div>
+                )}
+
+                <motion.button
+                  onClick={handleQuery}
+                  disabled={isQueryLoading}
+                  className={`w-full py-3 rounded-lg text-white font-semibold transition flex items-center justify-center ${
+                    isQueryLoading
+                      ? "bg-gray-400 cursor-not-allowed"
+                      : "bg-indigo-600 hover:bg-indigo-700"
+                  }`}
+                  whileHover={!isQueryLoading ? { scale: 1.02 } : {}}
+                  whileTap={!isQueryLoading ? { scale: 0.98 } : {}}
+                >
+                  {isQueryLoading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                      <span>Processing...</span>
+                    </>
+                  ) : (
+                    "Ask Question"
+                  )}
+                </motion.button>
+              </div>
+
+              {response && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="mt-6 bg-white p-4 border border-gray-200 rounded-lg shadow-sm"
+                >
+                  <div className="flex items-center mb-3">
+                    <span className="text-green-500 mr-2">✓</span>
+                    <h4 className="font-semibold text-gray-800">AI Response:</h4>
+                  </div>
+                  <div className="prose prose-sm max-w-none">
+                    <p className="text-gray-700 whitespace-pre-wrap">{response}</p>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          </motion.div>
+        )}
 
         {/* Instructions */}
         <motion.div
