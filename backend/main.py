@@ -102,26 +102,34 @@ def parse_whatsapp_chat(content: str) -> List[ChatMessage]:
     for line in lines:
         # Multiple WhatsApp message patterns to handle different export formats
         patterns = [
-            # Pattern 1: MM/DD/YYYY, HH:MM AM/PM - Sender: Message (your format)
+            # Pattern 1: DD/MM/YYYY, HH:MM AM/PM - Sender: Message (4-digit year with AM/PM)
             r'^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2} [AP]M) - ([^:]+): (.+)$',
-            # Pattern 2: [DD/MM/YYYY, HH:MM:SS] Sender: Message
+            # Pattern 2: DD/MM/YY, HH:MM - Sender: Message (2-digit year without AM/PM)
+            r'^(\d{1,2}/\d{1,2}/\d{2}), (\d{1,2}:\d{2}) - ([^:]+): (.+)$',
+            # Pattern 3: DD/MM/YYYY, HH:MM - Sender: Message (4-digit year without AM/PM)
+            r'^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}) - ([^:]+): (.+)$',
+            # Pattern 4: DD/MM/YY, HH:MM AM/PM - Sender: Message (2-digit year with AM/PM)
+            r'^(\d{1,2}/\d{1,2}/\d{2}), (\d{1,2}:\d{2} [AP]M) - ([^:]+): (.+)$',
+            # Pattern 5: [DD/MM/YYYY, HH:MM:SS] Sender: Message
             r'^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}:\d{2}) ([^:]+): (.+)$',
-            # Pattern 3: [DD/MM/YYYY, HH:MM:SS] Sender: Message (with AM/PM)
+            # Pattern 6: [DD/MM/YYYY, HH:MM:SS] Sender: Message (with AM/PM)
             r'^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}:\d{2} [AP]M) ([^:]+): (.+)$',
-            # Pattern 4: DD/MM/YYYY, HH:MM:SS - Sender: Message
+            # Pattern 7: DD/MM/YYYY, HH:MM:SS - Sender: Message
             r'^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}:\d{2}) - ([^:]+): (.+)$',
-            # Pattern 5: [MM/DD/YYYY, HH:MM:SS] Sender: Message
+            # Pattern 8: [MM/DD/YYYY, HH:MM:SS] Sender: Message
             r'^(\d{1,2}/\d{1,2}/\d{4}), (\d{1,2}:\d{2}:\d{2}) ([^:]+): (.+)$',
-            # Pattern 6: YYYY-MM-DD HH:MM:SS - Sender: Message
+            # Pattern 9: YYYY-MM-DD HH:MM:SS - Sender: Message
             r'^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) - ([^:]+): (.+)$',
-            # Pattern 7: Simple format: Sender: Message (fallback)
+            # Pattern 10: Simple format: Sender: Message (fallback)
             r'^([^:]+): (.+)$'
         ]
         
         match = None
-        for pattern in patterns:
+        matched_pattern = None
+        for i, pattern in enumerate(patterns):
             match = re.match(pattern, line)
             if match:
+                matched_pattern = i + 1
                 break
         
         if match:
@@ -134,6 +142,18 @@ def parse_whatsapp_chat(content: str) -> List[ChatMessage]:
             if len(groups) == 4:
                 # Standard format with date and time
                 date, time, sender, content = groups
+                
+                # Handle 2-digit year conversion (YY -> 20YY)
+                if len(date.split('/')[-1]) == 2:
+                    date_parts = date.split('/')
+                    year = int(date_parts[-1])
+                    if year < 50:  # Assume years 00-49 are 2000-2049
+                        year += 2000
+                    else:  # Assume years 50-99 are 1950-1999
+                        year += 1900
+                    date_parts[-1] = str(year)
+                    date = '/'.join(date_parts)
+                
                 timestamp = f"{date} {time}"
             elif len(groups) == 2:
                 # Simple format without timestamp
@@ -152,6 +172,11 @@ def parse_whatsapp_chat(content: str) -> List[ChatMessage]:
         elif current_message and line.strip():
             # Continuation of previous message
             current_message.content += f"\n{line.strip()}"
+        else:
+            # Skip system messages and empty lines
+            if line.strip() and not line.startswith('Messages and calls are end-to-end encrypted') and not line.startswith('You blocked this contact'):
+                # Only log unparseable lines in debug mode
+                pass
     
     # Add last message
     if current_message:
