@@ -28,6 +28,7 @@ interface Message {
   content: string;
   timestamp: string;
   type: string;
+  formattedTimestamp?: string;
 }
 
 // Chat Analysis interfaces
@@ -58,6 +59,7 @@ const WhatsAppLivePage: React.FC = () => {
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   
   // UI state
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -71,6 +73,9 @@ const WhatsAppLivePage: React.FC = () => {
   const [isChatAnalysisLoading, setIsChatAnalysisLoading] = useState(false);
   const chatAnalysisMessagesContainerRef = useRef<HTMLDivElement>(null);
   const [chatAnalysisError, setChatAnalysisError] = useState<string | null>(null);
+
+  // Message display refs
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Check connection status
   const checkConnection = async () => {
@@ -175,13 +180,89 @@ const WhatsAppLivePage: React.FC = () => {
   };
 
   // Fetch messages for selected chat
+  const parseMessageContent = (content: string) => {
+    // Handle different message formats
+    const lines = content.split('\n');
+    
+    // If content contains timestamp patterns, extract them
+    const timestampPatterns = [
+      /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})/, // ISO format
+      /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/, // Standard format
+      /(\d{2}\/\d{2}\/\d{4}, \d{2}:\d{2} [AP]M)/, // WhatsApp format
+      /(\d{2}\/\d{2}\/\d{2}, \d{2}:\d{2})/, // Short format
+    ];
+    
+    let messageText = content;
+    let timestamp = '';
+    
+    // Try to find and extract timestamp
+    for (const pattern of timestampPatterns) {
+      const match = content.match(pattern);
+      if (match) {
+        timestamp = match[1];
+        messageText = content.replace(pattern, '').trim();
+        break;
+      }
+    }
+    
+    // If no timestamp found, try splitting by newlines
+    if (!timestamp && lines.length > 1) {
+      messageText = lines[0] || '';
+      timestamp = lines[1] || '';
+    }
+    
+    return {
+      text: messageText.trim(),
+      timestamp: timestamp.trim()
+    };
+  };
+
+  const formatTimestamp = (timestamp: string) => {
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) {
+        return timestamp; // Return original if parsing fails
+      }
+      
+      const now = new Date();
+      const isToday = date.toDateString() === now.toDateString();
+      const isYesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toDateString() === date.toDateString();
+      
+      if (isToday) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (isYesterday) {
+        return `Yesterday ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      } else {
+        return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      }
+    } catch (error) {
+      return timestamp;
+    }
+  };
+
   const fetchMessages = async (chatId: string) => {
     try {
+      setIsLoadingMessages(true);
       const response = await axios.get(`http://localhost:8081/api/messages?chatId=${chatId}`);
-      setMessages(response.data);
+      const rawMessages = response.data;
+      
+      // Parse and clean the messages
+      const parsedMessages = rawMessages.map((msg: any) => {
+        const parsed = parseMessageContent(msg.content);
+        return {
+          ...msg,
+          content: parsed.text,
+          timestamp: parsed.timestamp || msg.timestamp,
+          formattedTimestamp: formatTimestamp(parsed.timestamp || msg.timestamp)
+        };
+      });
+      
+      setMessages(parsedMessages);
     } catch (error) {
       console.error('Failed to fetch messages:', error);
       setMessages([]);
+    } finally {
+      setIsLoadingMessages(false);
     }
   };
 
@@ -336,6 +417,13 @@ const WhatsAppLivePage: React.FC = () => {
       return () => clearInterval(countdownInterval);
     }
   }, [isConnected, isLoading, isRegeneratingQR]);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   // Fetch messages when chat is selected
   useEffect(() => {
@@ -797,30 +885,51 @@ const WhatsAppLivePage: React.FC = () => {
                   </h2>
                 </div>
                 
-                <div className="h-96 overflow-y-auto p-4">
-                  {messages.map((message) => (
-                    <motion.div
-                      key={message.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`mb-4 ${
-                        message.sender === 'You' ? 'text-right' : 'text-left'
-                      }`}
-                    >
-                      <div
-                        className={`inline-block max-w-xs p-3 rounded-lg ${
-                          message.sender === 'You'
-                            ? 'bg-primary-600 text-white'
-                            : 'bg-gray-200 text-gray-900'
+                <div ref={messagesContainerRef} className="h-96 overflow-y-auto p-4 space-y-3">
+                  {isLoadingMessages ? (
+                    <div className="flex justify-center items-center h-full">
+                      <div className="flex items-center space-x-2 text-gray-500">
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>Loading messages...</span>
+                      </div>
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                      <MessageSquare className="w-12 h-12 mb-3 text-gray-400" />
+                      <p className="text-sm">No messages yet</p>
+                      <p className="text-xs text-gray-400 mt-1">Start a conversation!</p>
+                    </div>
+                  ) : (
+                    messages.map((message) => (
+                      <motion.div
+                        key={message.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`flex ${
+                          message.sender === 'You' ? 'justify-end' : 'justify-start'
                         }`}
                       >
-                        <p className="text-sm">{message.content}</p>
-                        <p className="text-xs opacity-75 mt-1">
-                          {message.timestamp}
-                        </p>
-                      </div>
-                    </motion.div>
-                  ))}
+                        <div className="flex flex-col max-w-[70%]">
+                          <div
+                            className={`px-4 py-2 rounded-2xl ${
+                              message.sender === 'You'
+                                ? 'bg-blue-500 text-white rounded-br-md'
+                                : 'bg-gray-100 text-gray-900 rounded-bl-md'
+                            }`}
+                          >
+                            <p className="text-sm leading-relaxed break-words">
+                              {message.content}
+                            </p>
+                          </div>
+                          <p className={`text-xs text-gray-500 mt-1 px-2 ${
+                            message.sender === 'You' ? 'text-right' : 'text-left'
+                          }`}>
+                            {message.formattedTimestamp || message.timestamp}
+                          </p>
+                        </div>
+                      </motion.div>
+                    ))
+                  )}
                 </div>
               </div>
             ) : (
