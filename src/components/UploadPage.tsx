@@ -8,6 +8,9 @@ const UploadPage = () => {
   const [chatText, setChatText] = useState("");
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState("");
+  const [isQueryLoading, setIsQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState("");
+  const [processedChatData, setProcessedChatData] = useState("");
   const navigate = useNavigate();
 
   const handleFileUpload = (text: string) => {
@@ -36,7 +39,9 @@ const UploadPage = () => {
       console.log("API Response:", result);
 
       if (result.summary) {
-        navigate("/results", { state: { summary: result.summary } });
+        // Store processed chat data for queries
+        setProcessedChatData(chatText);
+        navigate("/results", { state: { summary: result.summary, chatData: chatText } });
       } else {
         alert("Invalid response from server.");
       }
@@ -51,31 +56,48 @@ const UploadPage = () => {
 
   const handleQuery = async () => {
     if (!query.trim()) {
-      alert("Enter your query.");
+      setQueryError("Please enter your question.");
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const formData = new FormData();
-      formData.append("query", query);
+    if (!chatText.trim() && !processedChatData.trim()) {
+      setQueryError("Please upload a chat file first before asking questions.");
+      return;
+    }
 
-      const response = await fetch("http://localhost:8000/api/chat", {
+    setIsQueryLoading(true);
+    setQueryError("");
+    setResponse("");
+
+    try {
+      const requestBody = {
+        query: query,
+        chat_data: chatText || processedChatData
+      };
+
+      const res = await fetch("http://localhost:8000/api/chat", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
       });
 
-      const result = await response.json();
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      const result = await res.json();
       if (result.answer) {
         setResponse(result.answer);
       } else {
-        alert("No answer returned.");
+        setQueryError("No answer received from the server.");
       }
     } catch (error) {
-      console.error("Chat query error:", error);
-      alert("Failed to get response.");
+      console.error("Query error:", error);
+      setQueryError("Failed to get response. Please try again.");
     } finally {
-      setIsLoading(false);
+      setIsQueryLoading(false);
     }
   };
 
@@ -114,34 +136,69 @@ const UploadPage = () => {
 
         <hr className="my-8" />
 
-        <div className="mt-4">
-          <label className="block text-lg font-medium mb-2 text-gray-700">
-            Ask a follow-up question:
-          </label>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="e.g., What were the key decisions made?"
-            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-          />
+        {/* Query Section */}
+        <div className="mt-8 p-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+          <h3 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
+            <span className="mr-2">🤖</span>
+            Ask Questions About Your Chat
+          </h3>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2 text-gray-700">
+                Enter your question:
+              </label>
+              <textarea
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="e.g., What were the key decisions made? Who mentioned important deadlines? What was the main topic discussed?"
+                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition resize-none"
+                rows={3}
+                disabled={isQueryLoading}
+              />
+            </div>
 
-          <button
-            onClick={handleQuery}
-            disabled={isLoading}
-            className={`mt-4 w-full py-3 rounded-lg text-white font-semibold transition ${
-              isLoading
-                ? "bg-indigo-400 cursor-not-allowed"
-                : "bg-indigo-600 hover:bg-indigo-700"
-            }`}
-          >
-            {isLoading ? <LoadingSpinner /> : "Ask"}
-          </button>
+            {queryError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-red-600 text-sm">{queryError}</p>
+              </div>
+            )}
+
+            <button
+              onClick={handleQuery}
+              disabled={isQueryLoading || !chatText.trim()}
+              className={`w-full py-3 rounded-lg text-white font-semibold transition flex items-center justify-center ${
+                isQueryLoading || !chatText.trim()
+                  ? "bg-gray-400 cursor-not-allowed"
+                  : "bg-indigo-600 hover:bg-indigo-700"
+              }`}
+            >
+              {isQueryLoading ? (
+                <>
+                  <LoadingSpinner />
+                  <span className="ml-2">Processing...</span>
+                </>
+              ) : (
+                "Ask Question"
+              )}
+            </button>
+
+            {!chatText.trim() && (
+              <p className="text-sm text-gray-500 text-center">
+                Upload a chat file first to ask questions about it
+              </p>
+            )}
+          </div>
 
           {response && (
-            <div className="mt-6 bg-gray-50 p-4 border border-gray-200 rounded-lg">
-              <h3 className="font-semibold mb-2">Response:</h3>
-              <p className="text-gray-700 whitespace-pre-line">{response}</p>
+            <div className="mt-6 bg-white p-4 border border-gray-200 rounded-lg shadow-sm">
+              <div className="flex items-center mb-3">
+                <span className="text-green-500 mr-2">✓</span>
+                <h4 className="font-semibold text-gray-800">AI Response:</h4>
+              </div>
+              <div className="prose prose-sm max-w-none">
+                <p className="text-gray-700 whitespace-pre-wrap">{response}</p>
+              </div>
             </div>
           )}
         </div>

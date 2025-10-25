@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useLocation } from "react-router-dom";
 import { jsPDF } from "jspdf";
 import LoadingSpinner from "../components/LoadingSpinner";
@@ -6,10 +6,12 @@ import LoadingSpinner from "../components/LoadingSpinner";
 const ResultPage = () => {
   const location = useLocation();
   const summary = location.state?.summary || "";
+  const chatData = location.state?.chatData || "";
 
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [queryError, setQueryError] = useState("");
 
   const fullSummaryText = summary;
 
@@ -29,29 +31,41 @@ const ResultPage = () => {
 
   const handleQuery = async () => {
     if (!query.trim()) {
-      alert("Enter your question.");
+      setQueryError("Please enter your question.");
       return;
     }
 
     setIsLoading(true);
+    setQueryError("");
+    setResponse("");
+
     try {
-      const formData = new FormData();
-      formData.append("query", query);
+      const requestBody = {
+        query: query,
+        chat_data: chatData
+      };
 
       const res = await fetch("http://localhost:8000/api/chat", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
       });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
 
       const result = await res.json();
       if (result.answer) {
         setResponse(result.answer);
       } else {
-        alert("No answer received.");
+        setQueryError("No answer received from the server.");
       }
     } catch (error) {
       console.error("Query error:", error);
-      alert("Failed to get response.");
+      setQueryError("Failed to get response. Please try again.");
     } finally {
       setIsLoading(false);
     }
