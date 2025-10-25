@@ -88,13 +88,16 @@ func (ms *MessageStore) SaveMessage(msg *Message) error {
 
 // GetMessages retrieves messages for a specific chat
 func (ms *MessageStore) GetMessages(chatJID string) ([]*Message, error) {
+	// Calculate 3 weeks ago
+	threeWeeksAgo := time.Now().AddDate(0, 0, -21)
+
 	query := `
 	SELECT id, sender, content, timestamp, chat_jid, type
 	FROM messages
-	WHERE chat_jid = ?
+	WHERE chat_jid = ? AND timestamp >= ?
 	ORDER BY timestamp ASC
 	`
-	rows, err := ms.db.Query(query, chatJID)
+	rows, err := ms.db.Query(query, chatJID, threeWeeksAgo)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +319,7 @@ func main() {
 		json.NewEncoder(w).Encode(messages)
 	}))
 
-	http.HandleFunc("/api/qr", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+http.HandleFunc("/api/qr", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Pragma", "no-cache")
