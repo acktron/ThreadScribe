@@ -29,6 +29,10 @@ interface Message {
   timestamp: string;
   type: string;
   formattedTimestamp?: string;
+  fromMe?: boolean;
+  body?: string;
+  text?: string;
+  from?: string;
 }
 
 // Chat Analysis interfaces
@@ -60,6 +64,7 @@ const WhatsAppLivePage: React.FC = () => {
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [, setRawMessages] = useState<any[]>([]);
   
   // UI state
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -181,6 +186,10 @@ const WhatsAppLivePage: React.FC = () => {
 
   // Fetch messages for selected chat
   const parseMessageContent = (content: string) => {
+    if (!content || typeof content !== 'string') {
+      return { text: '', timestamp: '' };
+    }
+    
     // Handle different message formats
     const lines = content.split('\n');
     
@@ -211,8 +220,24 @@ const WhatsAppLivePage: React.FC = () => {
       timestamp = lines[1] || '';
     }
     
+    // Additional parsing for WhatsApp message format: "Sender: Message"
+    if (messageText.includes(':') && !timestamp) {
+      const colonIndex = messageText.indexOf(':');
+      const text = messageText.substring(colonIndex + 1).trim();
+      
+      // If this looks like a WhatsApp message format, extract the text
+      if (text && text.length > 0) {
+        messageText = text;
+      }
+    }
+    
+    // Clean up the message text
+    messageText = messageText.replace(/^\s*-\s*/, ''); // Remove leading dash
+    messageText = messageText.replace(/^\s*:\s*/, ''); // Remove leading colon
+    messageText = messageText.trim();
+    
     return {
-      text: messageText.trim(),
+      text: messageText,
       timestamp: timestamp.trim()
     };
   };
@@ -241,23 +266,78 @@ const WhatsAppLivePage: React.FC = () => {
   };
 
   const fetchMessages = async (chatId: string) => {
+    console.log('NEW CODE LOADED - Message rendering v2 - fetchMessages called');
     try {
       setIsLoadingMessages(true);
+      
+      // Request messages from MCP server
       const response = await axios.get(`http://localhost:8081/api/messages?chatId=${chatId}`);
       const rawMessages = response.data;
       
+      // Debug: Log first message structure for troubleshooting
+      if (rawMessages.length > 0) {
+        console.log('First message structure:', rawMessages[0]);
+      }
+      
+      setRawMessages(rawMessages);
+      
       // Parse and clean the messages
-      const parsedMessages = rawMessages.map((msg: any) => {
-        const parsed = parseMessageContent(msg.content);
+      const parsedMessages = rawMessages.map((msg: any, index: number) => {
+        
+        // Simple content extraction - just check the most common fields in order
+        const finalContent = msg.body || msg.content || msg.text || msg.message || msg.data || 'No content';
+        
+        // Determine sender - check for fromMe field or sender field
+        const senderId = msg.sender || msg.from || msg.name || '';
+        
+        // Determine if message is from me
+        const isFromMe = msg.fromMe === true || 
+                        msg.fromMe === 'true' || 
+                        senderId === 'You' || 
+                        msg.sender === 'You' || 
+                        msg.from === 'You' ||
+                        // If sender is a phone number (contains @s.whatsapp.net), it's from contact
+                        // If sender is not a phone number, it's likely from me
+                        (senderId && !senderId.includes('@s.whatsapp.net') && senderId !== 'Unknown');
+        
+        const sender = isFromMe ? 'You' : (senderId || 'Unknown');
+        
         return {
           ...msg,
-          content: parsed.text,
-          timestamp: parsed.timestamp || msg.timestamp,
-          formattedTimestamp: formatTimestamp(parsed.timestamp || msg.timestamp)
+          id: msg.id || `msg-${index}-${Date.now()}`,
+          content: finalContent,
+          sender: sender,
+          fromMe: isFromMe,
+          timestamp: msg.timestamp || msg.time || new Date().toISOString(),
+          formattedTimestamp: formatTimestamp(msg.timestamp || msg.time || new Date().toISOString())
         };
       });
       
-      setMessages(parsedMessages);
+      // Filter out empty messages (no text content)
+      const filteredMessages = parsedMessages.filter((msg: any) => {
+        const hasContent = msg.content && 
+                         msg.content.trim().length > 0 && 
+                         msg.content !== 'No content' &&
+                         msg.content !== 'null' &&
+                         msg.content !== 'undefined' &&
+                         !msg.content.match(/^\s*$/) &&
+                         msg.content.length > 1;
+        
+        if (!hasContent) {
+          console.log('Filtering out empty/invalid message:', {
+            content: msg.content,
+            length: msg.content ? msg.content.length : 0,
+            trimmed: msg.content ? msg.content.trim() : '',
+            msg: msg
+          });
+        }
+        return hasContent;
+      });
+      
+      console.log('Filtered messages count:', filteredMessages.length);
+      
+      setMessages(filteredMessages);
+      
     } catch (error) {
       console.error('Failed to fetch messages:', error);
       setMessages([]);
@@ -418,21 +498,18 @@ const WhatsAppLivePage: React.FC = () => {
     }
   }, [isConnected, isLoading, isRegeneratingQR]);
 
-  // Auto-scroll to bottom when messages change
+  // Auto-scroll to bottom when messages are loaded
   useEffect(() => {
-    if (messagesContainerRef.current) {
+    if (messagesContainerRef.current && messages.length > 0) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages.length]); // Trigger when messages change
 
   // Fetch messages when chat is selected
   useEffect(() => {
     if (selectedChat && isConnected) {
       fetchMessages(selectedChat.id);
-      const interval = setInterval(() => {
-        fetchMessages(selectedChat.id);
-      }, 2000);
-      return () => clearInterval(interval);
+      // Removed polling interval - messages will only load once when contact is selected
     }
   }, [selectedChat, isConnected]);
 
@@ -466,11 +543,12 @@ const WhatsAppLivePage: React.FC = () => {
     };
   };
 
-  const formatChatHistoryForAnalysis = (messages: Message[]): string => {
+
+  const formatMessagesForGemini = (messages: any[]): string => {
     return messages
       .map(msg => {
         const timestamp = new Date(msg.timestamp).toLocaleString();
-        return `${timestamp} - ${msg.sender}: ${msg.content}`;
+        return `[${timestamp}] ${msg.sender}: ${msg.content}`;
       })
       .join('\n');
   };
@@ -520,13 +598,77 @@ const WhatsAppLivePage: React.FC = () => {
         query: trimmedQuery,
       };
 
-      // If it's a contact-specific query, include chat history
+      // If it's a contact-specific query, fetch fresh messages and include chat history
       if (isContactSpecific && selectedChat) {
-        if (messages.length > 0) {
-          requestBody.chat_data = formatChatHistoryForAnalysis(messages);
+        try {
+          // Fetch fresh messages for the selected contact
+          const response = await axios.get(`http://localhost:8081/api/messages?chatId=${selectedChat.id}`);
+          const rawMessages = response.data;
+          
+          // Parse messages similar to fetchMessages function
+          const parsedMessages = rawMessages.map((msg: any, index: number) => {
+            const rawContent = msg.body || msg.content || msg.text || msg.message || msg.data || '';
+            const parsed = parseMessageContent(rawContent);
+            let finalContent = parsed.text || rawContent;
+            
+            // Additional fallback for content extraction
+            if (!finalContent || finalContent.trim().length === 0) {
+              const contentFields = ['body', 'content', 'text', 'message', 'data', 'caption'];
+              for (const field of contentFields) {
+                if (msg[field] && typeof msg[field] === 'string' && msg[field].trim().length > 0) {
+                  // Filter out phone numbers
+                  if (!msg[field].match(/@s\.whatsapp\.net/)) {
+                    finalContent = msg[field].trim();
+                    break;
+                  }
+                }
+              }
+            }
+            
+            const senderId = msg.sender || msg.from || msg.name || '';
+            const isFromMe = msg.fromMe === true || 
+                            msg.fromMe === 'true' || 
+                            senderId === 'You' || 
+                            msg.sender === 'You' || 
+                            msg.from === 'You' ||
+                            (senderId && !senderId.includes('@s.whatsapp.net') && senderId !== 'Unknown');
+            
+            const sender = isFromMe ? 'You' : (senderId || 'Unknown');
+            
+            return {
+              id: msg.id || `msg-${index}-${Date.now()}`,
+              content: finalContent,
+              sender: sender,
+              fromMe: isFromMe,
+              timestamp: parsed.timestamp || msg.timestamp || msg.time || new Date().toISOString(),
+            };
+          });
+          
+          // Filter out empty messages
+          const filteredMessages = parsedMessages.filter((msg: any) => {
+            return msg.content && 
+                   msg.content.trim().length > 0 && 
+                   msg.content !== 'No content' &&
+                   msg.content !== 'null' &&
+                   msg.content !== 'undefined' &&
+                   !msg.content.match(/^\s*$/) &&
+                   msg.content.length > 1;
+          });
+          
+          // Format chat history for analysis
+          if (filteredMessages.length > 0) {
+            const chatHistory = formatMessagesForGemini(filteredMessages);
+            requestBody.chat_data = chatHistory;
+            console.log('Sending chat data to Gemini:', chatHistory.substring(0, 200) + '...');
+          } else {
+            console.log('No messages found for chat analysis');
+          }
+        } catch (error) {
+          console.error('Failed to fetch messages for chat analysis:', error);
         }
       }
 
+      console.log('Sending request to backend:', { query: trimmedQuery, hasChatData: !!requestBody.chat_data });
       const response = await axios.post("http://localhost:8000/api/chat", requestBody);
       
       updateChatAnalysisConversation(selectedChat.id, prev => ({
@@ -880,9 +1022,18 @@ const WhatsAppLivePage: React.FC = () => {
             {selectedChat ? (
               <div className="bg-white rounded-lg shadow-sm border">
                 <div className="p-4 border-b">
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    {selectedChat.name}
-                  </h2>
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {selectedChat.name}
+                    </h2>
+                    <button
+                      onClick={() => fetchMessages(selectedChat.id)}
+                      className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                      title="Refresh messages"
+                    >
+                      <RefreshCw className="w-4 h-4 text-gray-600" />
+                    </button>
+                  </div>
                 </div>
                 
                 <div ref={messagesContainerRef} className="h-96 overflow-y-auto p-4 space-y-3">
@@ -900,35 +1051,38 @@ const WhatsAppLivePage: React.FC = () => {
                       <p className="text-xs text-gray-400 mt-1">Start a conversation!</p>
                     </div>
                   ) : (
-                    messages.map((message) => (
-                      <motion.div
-                        key={message.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className={`flex ${
-                          message.sender === 'You' ? 'justify-end' : 'justify-start'
-                        }`}
-                      >
-                        <div className="flex flex-col max-w-[70%]">
+        messages.map((message) => {
+          console.log('NEW CODE LOADED - Rendering message:', message.content, 'fromMe:', message.fromMe);
+          return (
+            <motion.div
+              key={message.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`flex ${
+                message.fromMe ? 'justify-end' : 'justify-start'
+              }`}
+            >
+                        <div className="flex flex-col max-w-[80%]">
                           <div
                             className={`px-4 py-2 rounded-2xl ${
-                              message.sender === 'You'
+                              message.fromMe
                                 ? 'bg-blue-500 text-white rounded-br-md'
                                 : 'bg-gray-100 text-gray-900 rounded-bl-md'
                             }`}
                           >
-                            <p className="text-sm leading-relaxed break-words">
-                              {message.content}
+                            <p className="text-sm leading-relaxed break-words whitespace-pre-wrap">
+                              {message.content || 'No content'}
                             </p>
                           </div>
                           <p className={`text-xs text-gray-500 mt-1 px-2 ${
-                            message.sender === 'You' ? 'text-right' : 'text-left'
+                            message.fromMe ? 'text-right' : 'text-left'
                           }`}>
                             {message.formattedTimestamp || message.timestamp}
-                          </p>
-                        </div>
-                      </motion.div>
-                    ))
+            </p>
+          </div>
+        </motion.div>
+        );
+      })
                   )}
                 </div>
               </div>
