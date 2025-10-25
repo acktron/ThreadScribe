@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import { 
@@ -8,7 +8,10 @@ import {
   Loader2, 
   LogOut,
   RefreshCw,
-  CheckCircle
+  CheckCircle,
+  Bot,
+  Send,
+  Trash2
 } from 'lucide-react';
 
 interface Chat {
@@ -27,6 +30,24 @@ interface Message {
   type: string;
 }
 
+// Chat Analysis interfaces
+interface ChatAnalysisMessage {
+  id: string;
+  question: string;
+  answer: string;
+  timestamp: number;
+  error?: string;
+  status: 'pending' | 'complete' | 'error';
+  isContactSpecific: boolean;
+}
+
+interface ChatAnalysisState {
+  messages: ChatAnalysisMessage[];
+  lastUpdated: number;
+  totalQuestions: number;
+  errorCount: number;
+}
+
 const WhatsAppLivePage: React.FC = () => {
   console.log('WhatsAppLivePage component rendering...');
   
@@ -43,6 +64,13 @@ const WhatsAppLivePage: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRegeneratingQR, setIsRegeneratingQR] = useState(false);
   const [qrCountdown, setQrCountdown] = useState(30);
+
+  // Chat Analysis state
+  const [chatAnalysisConversations, setChatAnalysisConversations] = useState<Record<string, ChatAnalysisState>>({});
+  const [chatAnalysisQuery, setChatAnalysisQuery] = useState("");
+  const [isChatAnalysisLoading, setIsChatAnalysisLoading] = useState(false);
+  const chatAnalysisMessagesContainerRef = useRef<HTMLDivElement>(null);
+  const [chatAnalysisError, setChatAnalysisError] = useState<string | null>(null);
 
   // Check connection status
   const checkConnection = async () => {
@@ -319,6 +347,162 @@ const WhatsAppLivePage: React.FC = () => {
       return () => clearInterval(interval);
     }
   }, [selectedChat, isConnected]);
+
+  // Chat Analysis functions
+  const updateChatAnalysisConversation = (
+    chatId: string,
+    updater: (prev: ChatAnalysisState) => ChatAnalysisState
+  ) => {
+    setChatAnalysisConversations(prev => ({
+      ...prev,
+      [chatId]: updater(prev[chatId] || {
+        messages: [],
+        lastUpdated: Date.now(),
+        totalQuestions: 0,
+        errorCount: 0,
+      }),
+    }));
+  };
+
+  const getCurrentChatAnalysisConversation = () => {
+    return selectedChat ? chatAnalysisConversations[selectedChat.id] || {
+      messages: [],
+      lastUpdated: 0,
+      totalQuestions: 0,
+      errorCount: 0,
+    } : {
+      messages: [],
+      lastUpdated: 0,
+      totalQuestions: 0,
+      errorCount: 0,
+    };
+  };
+
+  const formatChatHistoryForAnalysis = (messages: Message[]): string => {
+    return messages
+      .map(msg => {
+        const timestamp = new Date(msg.timestamp).toLocaleString();
+        return `${timestamp} - ${msg.sender}: ${msg.content}`;
+      })
+      .join('\n');
+  };
+
+  const isContactSpecificQuery = (query: string): boolean => {
+    const contactSpecificKeywords = [
+      'we discussed', 'our conversation', 'our chat', 'our messages',
+      'yesterday', 'today', 'last week', 'recently', 'earlier',
+      'how many messages', 'what did we talk about', 'what did we discuss',
+      'sentiment', 'tone', 'mood', 'emotion', 'feeling',
+      'decision', 'agreement', 'plan', 'schedule', 'meeting',
+      'this contact', 'this person', 'this chat', 'this conversation'
+    ];
+    
+    const lowerQuery = query.toLowerCase();
+    return contactSpecificKeywords.some(keyword => lowerQuery.includes(keyword));
+  };
+
+  const sendChatAnalysisQuery = async () => {
+    if (!selectedChat || !chatAnalysisQuery.trim()) return;
+
+    const trimmedQuery = chatAnalysisQuery.trim();
+    const isContactSpecific = isContactSpecificQuery(trimmedQuery);
+    
+    const newMessage: ChatAnalysisMessage = {
+      id: `chat-analysis-${Date.now()}`,
+      question: trimmedQuery,
+      answer: "",
+      timestamp: Date.now(),
+      status: 'pending',
+      isContactSpecific,
+    };
+
+    setChatAnalysisError(null);
+    updateChatAnalysisConversation(selectedChat.id, prev => ({
+      ...prev,
+      messages: [...prev.messages, newMessage],
+      lastUpdated: Date.now(),
+      totalQuestions: prev.totalQuestions + 1,
+    }));
+
+    setChatAnalysisQuery("");
+    setIsChatAnalysisLoading(true);
+
+    try {
+      let requestBody: any = {
+        query: trimmedQuery,
+      };
+
+      // If it's a contact-specific query, include chat history
+      if (isContactSpecific && selectedChat) {
+        if (messages.length > 0) {
+          requestBody.chat_data = formatChatHistoryForAnalysis(messages);
+        }
+      }
+
+      const response = await axios.post("http://localhost:8000/api/chat", requestBody);
+      
+      updateChatAnalysisConversation(selectedChat.id, prev => ({
+        ...prev,
+        messages: prev.messages.map(msg =>
+          msg.id === newMessage.id
+            ? {
+                ...msg,
+                answer: response.data.answer,
+                status: 'complete',
+              }
+            : msg
+        ),
+      }));
+
+      // Scroll to bottom with smooth animation
+      requestAnimationFrame(() => {
+        if (chatAnalysisMessagesContainerRef.current) {
+          chatAnalysisMessagesContainerRef.current.scrollTo({
+            top: chatAnalysisMessagesContainerRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      });
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.response?.data?.error || "Failed to get a response. Please try again.";
+      
+      updateChatAnalysisConversation(selectedChat.id, prev => ({
+        ...prev,
+        messages: prev.messages.map(msg =>
+          msg.id === newMessage.id
+            ? {
+                ...msg,
+                answer: "I encountered an error while processing your question.",
+                error: errorMessage,
+                status: 'error',
+              }
+            : msg
+        ),
+        errorCount: prev.errorCount + 1,
+      }));
+      
+      setChatAnalysisError(errorMessage);
+    } finally {
+      setIsChatAnalysisLoading(false);
+    }
+  };
+
+  const clearChatAnalysisHistory = () => {
+    if (selectedChat) {
+      setChatAnalysisConversations(prev => {
+        const newConversations = { ...prev };
+        delete newConversations[selectedChat.id];
+        return newConversations;
+      });
+    }
+  };
+
+  const handleChatAnalysisKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChatAnalysisQuery();
+    }
+  };
 
   // Loading state
   if (isLoading) {
@@ -603,7 +787,7 @@ const WhatsAppLivePage: React.FC = () => {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5, delay: 0.1 }}
-            className="lg:col-span-2"
+            className="lg:col-span-1"
           >
             {selectedChat ? (
               <div className="bg-white rounded-lg shadow-sm border">
@@ -647,6 +831,188 @@ const WhatsAppLivePage: React.FC = () => {
                 </div>
               </div>
             )}
+          </motion.div>
+
+          {/* Chat Analysis Section */}
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+            className="lg:col-span-1"
+          >
+            <div className="bg-white rounded-lg shadow-sm border">
+              <div className="p-4 border-b">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center">
+                      <Bot className="w-5 h-5 text-green-600" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-gray-900">
+                        Chat Analysis
+                        {selectedChat && `: ${selectedChat.name}`}
+                      </h2>
+                      {selectedChat && getCurrentChatAnalysisConversation().totalQuestions > 0 && (
+                        <div className="text-sm text-gray-500 flex items-center space-x-2">
+                          <span>{getCurrentChatAnalysisConversation().totalQuestions} questions asked</span>
+                          {getCurrentChatAnalysisConversation().errorCount > 0 && (
+                            <span className="text-red-500">({getCurrentChatAnalysisConversation().errorCount} errors)</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {getCurrentChatAnalysisConversation().messages.length > 0 && (
+                    <button
+                      onClick={clearChatAnalysisHistory}
+                      className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                      title="Clear history"
+                    >
+                      <Trash2 className="w-4 h-4 text-gray-600" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {chatAnalysisError && (
+                <div className="px-4 py-2 bg-red-50 border-b border-red-100">
+                  <p className="text-sm text-red-600 flex items-center">
+                    <AlertCircle className="w-4 h-4 mr-2 flex-shrink-0" />
+                    {chatAnalysisError}
+                  </p>
+                </div>
+              )}
+
+              <div 
+                ref={chatAnalysisMessagesContainerRef}
+                className="h-96 overflow-y-auto p-4 bg-gray-50"
+              >
+                {selectedChat ? (
+                  <>
+                    {getCurrentChatAnalysisConversation().messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                        <Bot className="w-12 h-12 mb-3 text-gray-400" />
+                        <p className="text-sm text-center">
+                          Ask questions about this chat or anything else!
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1 text-center">
+                          Try: "What did we discuss yesterday?" or "How's the weather?"
+                        </p>
+                      </div>
+                    ) : (
+                      getCurrentChatAnalysisConversation().messages.map((msg) => (
+                        <div key={msg.id} className="mb-4">
+                          <div className="flex flex-col space-y-2">
+                            <div className="flex justify-end">
+                              <div className="max-w-[85%] bg-green-50 rounded-lg px-3 py-2 shadow-sm">
+                                <p className="text-sm text-gray-800">{msg.question}</p>
+                                <div className="flex items-center justify-between mt-1">
+                                  <p className="text-xs text-gray-500">
+                                    {msg.isContactSpecific ? "Chat-specific" : "General"}
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    {new Date(msg.timestamp).toLocaleTimeString([], {
+                                      hour: "2-digit",
+                                      minute: "2-digit"
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                            {msg.status === 'complete' && (
+                              <div className="flex justify-start">
+                                <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{msg.answer}</p>
+                                  <p className="text-xs text-gray-500 text-right mt-1">
+                                    {new Date(msg.timestamp).toLocaleTimeString([], {
+                                      hour: "2-digit",
+                                      minute: "2-digit"
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                            {msg.status === 'pending' && (
+                              <div className="flex justify-start">
+                                <div className="max-w-[85%] bg-white rounded-lg px-3 py-2 shadow-sm">
+                                  <div className="flex items-center space-x-1">
+                                    <div className="animate-pulse flex space-x-1">
+                                      <div className="h-2 w-2 bg-green-500 rounded-full"></div>
+                                      <div className="h-2 w-2 bg-green-500 rounded-full animation-delay-200"></div>
+                                      <div className="h-2 w-2 bg-green-500 rounded-full animation-delay-400"></div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                            {msg.status === 'error' && (
+                              <div className="flex justify-start">
+                                <div className="max-w-[85%] bg-red-50 rounded-lg px-3 py-2 shadow-sm">
+                                  <p className="text-sm text-red-600">{msg.error}</p>
+                                  <p className="text-xs text-red-500 text-right mt-1">
+                                    {new Date(msg.timestamp).toLocaleTimeString([], {
+                                      hour: "2-digit",
+                                      minute: "2-digit"
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                    <Bot className="w-16 h-16 mb-4 text-gray-400" />
+                    <p className="text-lg font-light">Please select a contact to start chat analysis</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 bg-white border-t border-gray-200">
+                <div className="flex items-center space-x-2 bg-gray-50 px-4 py-3 rounded-lg">
+                  <div className="flex-1">
+                    <textarea
+                      value={chatAnalysisQuery}
+                      onChange={(e) => setChatAnalysisQuery(e.target.value)}
+                      onKeyPress={handleChatAnalysisKeyPress}
+                      placeholder="Ask about this chat or anything else..."
+                      disabled={!selectedChat || isChatAnalysisLoading}
+                      className={`w-full bg-transparent text-gray-800 placeholder-gray-500 resize-none focus:outline-none min-h-[24px] max-h-[100px] text-sm ${
+                        !selectedChat ? "cursor-not-allowed" : ""
+                      }`}
+                      rows={1}
+                    />
+                  </div>
+                  {!chatAnalysisQuery.trim() ? (
+                    <button 
+                      className="p-2 rounded-full hover:bg-gray-100 transition-colors duration-200"
+                      disabled={!selectedChat}
+                    >
+                      <MessageSquare className="w-4 h-4 text-gray-600" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={sendChatAnalysisQuery}
+                      disabled={!selectedChat || isChatAnalysisLoading || !chatAnalysisQuery.trim()}
+                      className={`p-2 rounded-full transition-colors duration-200 ${
+                        !selectedChat || isChatAnalysisLoading
+                          ? "bg-gray-200 cursor-not-allowed"
+                          : "bg-green-600 hover:bg-green-700 text-white"
+                      }`}
+                    >
+                      {isChatAnalysisLoading ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </motion.div>
         </div>
       </div>
