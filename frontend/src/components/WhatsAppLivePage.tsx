@@ -71,6 +71,7 @@ const WhatsAppLivePage: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isRegeneratingQR, setIsRegeneratingQR] = useState(false);
   const [qrCountdown, setQrCountdown] = useState(30);
+  const [currentUserJID, setCurrentUserJID] = useState('');
 
   // Chat Analysis state
   const [chatAnalysisConversations, setChatAnalysisConversations] = useState<Record<string, ChatAnalysisState>>({});
@@ -266,7 +267,6 @@ const WhatsAppLivePage: React.FC = () => {
   };
 
   const fetchMessages = async (chatId: string) => {
-    console.log('NEW CODE LOADED - Message rendering v2 - fetchMessages called');
     try {
       setIsLoadingMessages(true);
       
@@ -274,10 +274,6 @@ const WhatsAppLivePage: React.FC = () => {
       const response = await axios.get(`http://localhost:8081/api/messages?chatId=${chatId}`);
       const rawMessages = response.data;
       
-      // Debug: Log first message structure for troubleshooting
-      if (rawMessages.length > 0) {
-        console.log('First message structure:', rawMessages[0]);
-      }
       
       setRawMessages(rawMessages);
       
@@ -290,15 +286,14 @@ const WhatsAppLivePage: React.FC = () => {
         // Determine sender - check for fromMe field or sender field
         const senderId = msg.sender || msg.from || msg.name || '';
         
-        // Determine if message is from me
+        // Determine if message is from me - simple logic
         const isFromMe = msg.fromMe === true || 
                         msg.fromMe === 'true' || 
                         senderId === 'You' || 
                         msg.sender === 'You' || 
                         msg.from === 'You' ||
-                        // If sender is a phone number (contains @s.whatsapp.net), it's from contact
-                        // If sender is not a phone number, it's likely from me
-                        (senderId && !senderId.includes('@s.whatsapp.net') && senderId !== 'Unknown');
+                        senderId === currentUserJID ||
+                        msg.sender === currentUserJID;
         
         const sender = isFromMe ? 'You' : (senderId || 'Unknown');
         
@@ -343,6 +338,18 @@ const WhatsAppLivePage: React.FC = () => {
       setMessages([]);
     } finally {
       setIsLoadingMessages(false);
+    }
+  };
+
+  // Fetch current user JID
+  const fetchCurrentUserJID = async () => {
+    try {
+      const response = await axios.get('http://localhost:8081/api/status');
+      if (response.data.jid) {
+        setCurrentUserJID(response.data.jid);
+      }
+    } catch (error) {
+      console.error('Failed to fetch user JID:', error);
     }
   };
 
@@ -427,19 +434,15 @@ const WhatsAppLivePage: React.FC = () => {
   // Initial load
   useEffect(() => {
     const initialize = async () => {
-      console.log('Component mounted, initializing...');
       setIsLoading(true);
       const connected = await checkConnection();
       
       if (connected) {
-        console.log('Connected, fetching chats...');
+        await fetchCurrentUserJID();
         await fetchChats();
-      } else {
-        console.log('Not connected, should show QR code');
       }
       
       setIsLoading(false);
-      console.log('Initialization complete');
     };
     
     initialize();
@@ -631,7 +634,8 @@ const WhatsAppLivePage: React.FC = () => {
                             senderId === 'You' || 
                             msg.sender === 'You' || 
                             msg.from === 'You' ||
-                            (senderId && !senderId.includes('@s.whatsapp.net') && senderId !== 'Unknown');
+                            senderId === currentUserJID ||
+                            msg.sender === currentUserJID;
             
             const sender = isFromMe ? 'You' : (senderId || 'Unknown');
             
@@ -659,16 +663,12 @@ const WhatsAppLivePage: React.FC = () => {
           if (filteredMessages.length > 0) {
             const chatHistory = formatMessagesForGemini(filteredMessages);
             requestBody.chat_data = chatHistory;
-            console.log('Sending chat data to Gemini:', chatHistory.substring(0, 200) + '...');
-          } else {
-            console.log('No messages found for chat analysis');
           }
         } catch (error) {
           console.error('Failed to fetch messages for chat analysis:', error);
         }
       }
 
-      console.log('Sending request to backend:', { query: trimmedQuery, hasChatData: !!requestBody.chat_data });
       const response = await axios.post("http://localhost:8000/api/chat", requestBody);
       
       updateChatAnalysisConversation(selectedChat.id, prev => ({
@@ -1065,7 +1065,6 @@ const WhatsAppLivePage: React.FC = () => {
                     </div>
                   ) : (
         messages.map((message) => {
-          console.log('NEW CODE LOADED - Rendering message:', message.content, 'fromMe:', message.fromMe);
           return (
             <motion.div
               key={message.id}
