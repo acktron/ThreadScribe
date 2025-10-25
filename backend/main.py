@@ -339,8 +339,6 @@ async def chat_query(request: QueryRequest):
         if GEMINI_AVAILABLE:
             # Build context-aware prompt
             if request.chat_data:
-                print(f"DEBUG: Received chat_data length: {len(request.chat_data)}")
-                print(f"DEBUG: First 200 chars of chat_data: {request.chat_data[:200]}")
                 prompt = f"""
                 You are analyzing a WhatsApp chat conversation. Here is the chat data:
 

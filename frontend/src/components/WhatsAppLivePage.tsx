@@ -286,14 +286,27 @@ const WhatsAppLivePage: React.FC = () => {
         // Determine sender - check for fromMe field or sender field
         const senderId = msg.sender || msg.from || msg.name || '';
         
-        // Determine if message is from me - simple logic
+        // DEBUG: Log JID comparison
+        console.log('Current User JID:', currentUserJID);
+        console.log('Message sender:', msg.sender, 'senderId:', senderId, 'msg.from:', msg.from);
+        
+        // Extract phone numbers for comparison (remove @s.whatsapp.net and :deviceId)
+        const currentUserPhone = currentUserJID ? currentUserJID.split('@')[0].split(':')[0] : '';
+        const senderPhone = senderId ? senderId.split('@')[0].split(':')[0] : '';
+        
+        console.log('Current User Phone:', currentUserPhone, 'Sender Phone:', senderPhone);
+        
+        // Determine if message is from me - compare phone numbers
         const isFromMe = msg.fromMe === true || 
                         msg.fromMe === 'true' || 
                         senderId === 'You' || 
                         msg.sender === 'You' || 
                         msg.from === 'You' ||
+                        currentUserPhone === senderPhone ||
                         senderId === currentUserJID ||
                         msg.sender === currentUserJID;
+        
+        console.log('FromMe result:', isFromMe);
         
         const sender = isFromMe ? 'You' : (senderId || 'Unknown');
         
@@ -346,6 +359,7 @@ const WhatsAppLivePage: React.FC = () => {
     try {
       const response = await axios.get('http://localhost:8081/api/status');
       if (response.data.jid) {
+        console.log('DEBUG: Fetched currentUserJID:', response.data.jid);
         setCurrentUserJID(response.data.jid);
       }
     } catch (error) {
@@ -629,13 +643,27 @@ const WhatsAppLivePage: React.FC = () => {
             }
             
             const senderId = msg.sender || msg.from || msg.name || '';
+            
+            // DEBUG: Log JID comparison for chat analysis
+            console.log('Chat Analysis - Current User JID:', currentUserJID);
+            console.log('Chat Analysis - Message sender:', msg.sender, 'senderId:', senderId);
+            
+            // Extract phone numbers for comparison (remove @s.whatsapp.net and :deviceId)
+            const currentUserPhone = currentUserJID ? currentUserJID.split('@')[0].split(':')[0] : '';
+            const senderPhone = senderId ? senderId.split('@')[0].split(':')[0] : '';
+            
+            console.log('Chat Analysis - Current User Phone:', currentUserPhone, 'Sender Phone:', senderPhone);
+            
             const isFromMe = msg.fromMe === true || 
                             msg.fromMe === 'true' || 
                             senderId === 'You' || 
                             msg.sender === 'You' || 
                             msg.from === 'You' ||
+                            currentUserPhone === senderPhone ||
                             senderId === currentUserJID ||
                             msg.sender === currentUserJID;
+            
+            console.log('Chat Analysis - FromMe result:', isFromMe);
             
             const sender = isFromMe ? 'You' : (senderId || 'Unknown');
             
