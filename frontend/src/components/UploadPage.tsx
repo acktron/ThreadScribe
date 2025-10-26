@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileText, MessageSquare, ArrowLeft, Loader2 } from 'lucide-react';
@@ -14,6 +14,11 @@ const UploadPage = () => {
   const [response, setResponse] = useState("");
   const [isQueryLoading, setIsQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState("");
+
+  // Update page title
+  useEffect(() => {
+    document.title = "Upload Chat - ThreadScribe";
+  }, []);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();

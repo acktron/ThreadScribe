@@ -28,6 +28,7 @@ interface Message {
   content: string;
   timestamp: string;
   type: string;
+  chatJID?: string;
   formattedTimestamp?: string;
   fromMe?: boolean;
   body?: string;
@@ -72,6 +73,8 @@ const WhatsAppLivePage: React.FC = () => {
   const [isRegeneratingQR, setIsRegeneratingQR] = useState(false);
   const [qrCountdown, setQrCountdown] = useState(30);
   const [currentUserJID, setCurrentUserJID] = useState('');
+  const [messageInput, setMessageInput] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
 
   // Chat Analysis state
   const [chatAnalysisConversations, setChatAnalysisConversations] = useState<Record<string, ChatAnalysisState>>({});
@@ -367,6 +370,43 @@ const WhatsAppLivePage: React.FC = () => {
     }
   };
 
+  // Send message function
+  const sendMessage = async () => {
+    if (!messageInput.trim() || !selectedChat || isSendingMessage) return;
+
+    setIsSendingMessage(true);
+    try {
+      const response = await axios.post(
+        `http://localhost:8081/api/chat/${selectedChat.id}/send`,
+        { message: messageInput.trim() }
+      );
+
+      if (response.data.success) {
+        // Optimistic update - add message to current messages
+        const newMessage: Message = {
+          id: `temp-${Date.now()}`,
+          content: messageInput.trim(),
+          sender: 'You',
+          timestamp: new Date().toISOString(),
+          chatJID: selectedChat.id,
+          type: 'text',
+          fromMe: true,
+          formattedTimestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+
+        setMessages(prev => [...prev, newMessage]);
+        setMessageInput('');
+      } else {
+        throw new Error(response.data.message || 'Failed to send message');
+      }
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      // Silent error handling - no popup
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
   // Logout function
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -460,6 +500,11 @@ const WhatsAppLivePage: React.FC = () => {
     };
     
     initialize();
+  }, []);
+
+  // Update page title
+  useEffect(() => {
+    document.title = "Live Chat Analysis - ThreadScribe";
   }, []);
 
   // Periodic connection check
@@ -699,13 +744,20 @@ const WhatsAppLivePage: React.FC = () => {
 
       const response = await axios.post("http://localhost:8000/api/chat", requestBody);
       
+      // Ensure response is max 100 words
+      let aiResponse = response.data.answer;
+      const words = aiResponse.split(' ');
+      if (words.length > 100) {
+        aiResponse = words.slice(0, 100).join(' ') + ' Let me know if you want more details!';
+      }
+      
       updateChatAnalysisConversation(selectedChat.id, prev => ({
         ...prev,
         messages: prev.messages.map(msg =>
           msg.id === newMessage.id
             ? {
                 ...msg,
-                answer: response.data.answer,
+                answer: aiResponse,
                 status: 'complete',
               }
             : msg
@@ -1077,21 +1129,22 @@ const WhatsAppLivePage: React.FC = () => {
                   </div>
                 </div>
                 
-                <div ref={messagesContainerRef} className="h-96 overflow-y-auto p-4 space-y-3">
-                  {isLoadingMessages ? (
-                    <div className="flex justify-center items-center h-full">
-                      <div className="flex items-center space-x-2 text-gray-500">
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                        <span>Loading messages...</span>
+                <div className="flex flex-col h-96">
+                  <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+                    {isLoadingMessages ? (
+                      <div className="flex justify-center items-center h-full">
+                        <div className="flex items-center space-x-2 text-gray-500">
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          <span>Loading messages...</span>
+                        </div>
                       </div>
-                    </div>
-                  ) : messages.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                      <MessageSquare className="w-12 h-12 mb-3 text-gray-400" />
-                      <p className="text-sm">No messages yet</p>
-                      <p className="text-xs text-gray-400 mt-1">Start a conversation!</p>
-                    </div>
-                  ) : (
+                    ) : messages.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                        <MessageSquare className="w-12 h-12 mb-3 text-gray-400" />
+                        <p className="text-sm">No messages yet</p>
+                        <p className="text-xs text-gray-400 mt-1">Start a conversation!</p>
+                      </div>
+                    ) : (
         messages.map((message) => {
           return (
             <motion.div
@@ -1123,7 +1176,34 @@ const WhatsAppLivePage: React.FC = () => {
         </motion.div>
         );
       })
-                  )}
+                    )}
+                  </div>
+                  
+                  {/* Send Message Input - Sticky at bottom */}
+                  <div className="border-t bg-white p-3">
+                    <div className="flex space-x-2">
+                      <input
+                        type="text"
+                        value={messageInput}
+                        onChange={(e) => setMessageInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                        placeholder="Type a message..."
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        disabled={isSendingMessage}
+                      />
+                      <button
+                        onClick={sendMessage}
+                        disabled={!messageInput.trim() || isSendingMessage}
+                        className="px-4 py-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center w-10 h-10"
+                      >
+                        {isSendingMessage ? (
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <span>📤</span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (

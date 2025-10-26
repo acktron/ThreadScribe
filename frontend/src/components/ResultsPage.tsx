@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
@@ -75,6 +75,11 @@ const ResultsPage = () => {
   const [isQueryLoading, setIsQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState('');
 
+  // Update page title
+  useEffect(() => {
+    document.title = "Chat Analysis Results - ThreadScribe";
+  }, []);
+
   const handleQuerySubmit = async () => {
     if (!queryInput.trim()) {
       setQueryError('Please enter a question.');
@@ -119,11 +124,18 @@ const ResultsPage = () => {
 
       const result = await response.json();
       
+      // Ensure response is max 100 words
+      let aiResponse = result.answer;
+      const words = aiResponse.split(' ');
+      if (words.length > 100) {
+        aiResponse = words.slice(0, 100).join(' ') + ' Let me know if you want more details!';
+      }
+      
       // Update the query with the response
       setQueryHistory(prev => 
         prev.map(q => 
           q.id === queryId 
-            ? { ...q, answer: result.answer, isLoading: false }
+            ? { ...q, answer: aiResponse, isLoading: false }
             : q
         )
       );

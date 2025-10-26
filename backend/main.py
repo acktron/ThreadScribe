@@ -340,21 +340,24 @@ async def chat_query(request: QueryRequest):
             # Build context-aware prompt
             if request.chat_data:
                 prompt = f"""
-                You are analyzing a WhatsApp chat conversation. Here is the chat data:
+                You are a helpful WhatsApp chat analysis assistant. Here is the chat data:
 
-                {request.chat_data[:8000]}  # Limit to avoid token limits
+                {request.chat_data[:8000]}
 
                 User Question: {request.query}
 
-                Please provide a detailed, helpful answer based on the actual chat content. 
-                If the question can't be answered from the chat data, say so clearly.
-                Focus on specific details from the conversation when possible.
+                IMPORTANT: Keep your response to MAXIMUM 100 words. Be concise, friendly, and direct like a chatbot. 
+                If you need more space, end with "Let me know if you want more details!"
+                Focus on the most important points from the chat data.
                 """
             else:
                 prompt = f"""
-                Answer this question about WhatsApp chat analysis: {request.query}
+                You are a helpful WhatsApp chat analysis assistant.
                 
-                Provide a helpful response based on common chat analysis patterns.
+                User Question: {request.query}
+                
+                IMPORTANT: Keep your response to MAXIMUM 100 words. Be concise, friendly, and direct like a chatbot.
+                If you need more space, end with "Let me know if you want more details!"
                 """
             
             response = model.generate_content(prompt)

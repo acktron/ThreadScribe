@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -14,6 +14,11 @@ import {
 
 const LandingPage = () => {
   const navigate = useNavigate();
+
+  // Update page title
+  useEffect(() => {
+    document.title = "ThreadScribe - WhatsApp Chat Analysis";
+  }, []);
 
   const features = [
     {

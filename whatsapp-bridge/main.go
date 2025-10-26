@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -319,7 +321,79 @@ func main() {
 		json.NewEncoder(w).Encode(messages)
 	}))
 
-http.HandleFunc("/api/qr", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	// Send message endpoint
+	http.HandleFunc("/api/chat/", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Extract chatId from URL path
+		path := strings.TrimPrefix(r.URL.Path, "/api/chat/")
+		parts := strings.Split(path, "/")
+		if len(parts) < 2 || parts[1] != "send" {
+			http.Error(w, "Invalid endpoint", http.StatusNotFound)
+			return
+		}
+
+		chatID := parts[0]
+		if chatID == "" {
+			http.Error(w, "chatId is required", http.StatusBadRequest)
+			return
+		}
+
+		// Check if client is connected
+		if client.Store.ID == nil || client.Store.ID.User == "" {
+			http.Error(w, "WhatsApp not connected", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Parse request body
+		var requestBody struct {
+			Message string `json:"message"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if requestBody.Message == "" {
+			http.Error(w, "Message is required", http.StatusBadRequest)
+			return
+		}
+
+		// Parse chat JID
+		parsedJID, err := types.ParseJID(chatID)
+		if err != nil {
+			http.Error(w, "Invalid chat JID", http.StatusBadRequest)
+			return
+		}
+
+		// Send message using whatsmeow
+		_, err = client.SendMessage(context.Background(), parsedJID, &waE2E.Message{
+			Conversation: &requestBody.Message,
+		}, whatsmeow.SendRequestExtra{})
+		if err != nil {
+			log.Printf("Failed to send message: %v", err)
+			response := map[string]interface{}{
+				"success": false,
+				"message": "Failed to send message",
+				"error":   err.Error(),
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(response)
+			return
+		}
+
+		log.Printf("Message sent to %s: %s", chatID, requestBody.Message)
+
+		// Return success response
+		response := map[string]interface{}{
+			"success": true,
+			"message": "Message sent successfully",
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+
+	http.HandleFunc("/api/qr", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		w.Header().Set("Pragma", "no-cache")

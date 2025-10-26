@@ -7,7 +7,7 @@ toolchain go1.24.3
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	go.mau.fi/whatsmeow v0.0.0-20251016095441-02c50743e601
+	go.mau.fi/whatsmeow v0.0.0-20251024191251-088fa33fb87f
 )
 
 require (

@@ -28,6 +28,12 @@ interface DashboardStats {
 
 const DashboardPage = () => {
   const navigate = useNavigate();
+  
+  // Update page title
+  useEffect(() => {
+    document.title = "Dashboard - ThreadScribe";
+  }, []);
+
   const [stats, setStats] = useState<DashboardStats>({
     totalChats: 0,
     totalMessages: 0,
