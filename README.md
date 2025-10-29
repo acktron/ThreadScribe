@@ -4,9 +4,11 @@
 
 ## 🚀 Project Demo
 
-<video src="compressedfile.mp4" controls width="700"></video>
+[![Watch the Video](https://img.youtube.com/vi/EUSVkFxTFSA/0.jpg)](https://www.youtube.com/watch?v=EUSVkFxTFSA)
 
-_If you don't see the video, open this file in a Markdown viewer that supports the <video> tag. For GitHub, upload the video to YouTube or GitHub Releases and use an external link for best embedding._
+_Click the thumbnail above or [watch on YouTube](https://www.youtube.com/watch?v=EUSVkFxTFSA)_
+
+_This is the official demo video showcasing ThreadScribe's features and capabilities._
 
 ---
 
