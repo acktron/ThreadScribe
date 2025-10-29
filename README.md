@@ -2,6 +2,16 @@
 
 **AI-powered WhatsApp chat analysis tool that transforms conversations into actionable insights**
 
+## 🚀 Project Demo
+
+<video src="demo-video.mp4" controls width="700"></video>
+
+_If you don't see the video, open this file in GitHub or a Markdown viewer that supports the `<video>` tag, or upload the video to GitHub Releases or an external platform for best embedding._
+
+_Click to watch the demo video!_
+
+---
+
 ThreadScribe is a comprehensive solution that analyzes WhatsApp chats using advanced LLMs (Gemini, Hugging Face) to extract tasks, questions, decisions, and key insights. Built with React, FastAPI, GoLang, and TailwindCSS.
 
 ## 🚀 Features
