@@ -4,18 +4,9 @@
 
 ## 🚀 Project Demo
 
-> **Note:** The demo video is too large for GitHub (146MB). Please upload it to [YouTube](https://www.youtube.com) or [GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository) and update the link below.
+<video src="compressedfile.mp4" controls width="700"></video>
 
-<!-- Option 1: YouTube embed (recommended) -->
-<!-- [![Project Demo Video](https://img.youtube.com/vi/VIDEO_ID/0.jpg)](https://www.youtube.com/watch?v=VIDEO_ID) -->
-
-<!-- Option 2: GitHub Releases download link -->
-<!-- [📹 Download Demo Video](./demo-video.mp4) or [Watch on YouTube](YOUTUBE_URL) -->
-
-<!-- Option 3: Direct video tag (works in Markdown viewers, not GitHub) -->
-<video src="demo-video.mp4" controls width="700"></video>
-
-_If you don't see the video, open this file in GitHub or a Markdown viewer that supports the <video> tag. For best sharing, upload the video to YouTube and use a thumbnail/embed._
+_If you don't see the video, open this file in a Markdown viewer that supports the <video> tag. For GitHub, upload the video to YouTube or GitHub Releases and use an external link for best embedding._
 
 ---
 
