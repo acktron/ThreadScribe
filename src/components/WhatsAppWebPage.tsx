@@ -3,22 +3,6 @@ import axios from "axios";
 import QRCodeStyling from "qr-code-styling";
 import { debounce } from 'lodash';
 
-interface APIMessage {
-  key: {
-    remoteJid: string;
-    fromMe: boolean;
-    id: string;
-  };
-  message: {
-    conversation?: string;
-    extendedTextMessage?: {
-      text: string;
-    };
-  };
-  messageTimestamp: number;
-  status?: 'sent' | 'delivered' | 'read';
-}
-
 interface Message {
   id: string;
   fromMe: boolean;
@@ -169,7 +153,6 @@ const WhatsAppWebPage = () => {
   const [newMsg, setNewMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory>({});
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -436,8 +419,6 @@ const WhatsAppWebPage = () => {
         question: trimmedQuery,
       });
 
-      const processingTime = Date.now() - (queryStartTime.current || Date.now());
-      
       updateAiConversation(selectedChat, prev => ({
         ...prev,
         messages: prev.messages.map(msg =>
@@ -448,7 +429,7 @@ const WhatsAppWebPage = () => {
                 contextSize: response.data.context_length,
                 status: 'complete',
                 metadata: {
-                  processingTime,
+                  processingTime: Date.now() - (queryStartTime.current || Date.now()),
                   confidence: response.data.confidence,
                   relevantDates: response.data.relevant_dates,
                 },
@@ -608,8 +589,6 @@ const WhatsAppWebPage = () => {
       }
 
       const response = await axios.post("http://localhost:8000/api/chat", requestBody);
-
-      const processingTime = Date.now() - (chatAnalysisQueryStartTime.current || Date.now());
       
       updateChatAnalysisConversation(selectedChat, prev => ({
         ...prev,
@@ -719,22 +698,13 @@ const WhatsAppWebPage = () => {
     }
   };
 
-  // Convert WhatsApp message format to our format
-  const convertMessage = (apiMsg: APIMessage): Message => {
-    return {
-      id: apiMsg.key.id,
-      fromMe: apiMsg.key.fromMe,
-      timestamp: apiMsg.messageTimestamp * 1000, // Convert to milliseconds
-      text: apiMsg.message.conversation || apiMsg.message.extendedTextMessage?.text || '',
-      status: apiMsg.status || 'delivered',
-      remoteJid: apiMsg.key.remoteJid
-    };
-  };
-
   // Update message fetching with scroll position preservation
   useEffect(() => {
-    if (selectedChat && connected) {
-      const fetchMessages = async () => {
+    if (!selectedChat || !connected) {
+      return;
+    }
+
+    const fetchMessages = async () => {
         try {
           console.log("Fetching messages for chat:", selectedChat);
           const res = await axios.get(`http://localhost:8000/api/mcp/messages?chatId=${selectedChat}`);
@@ -844,17 +814,21 @@ const WhatsAppWebPage = () => {
       // Initial fetch
       fetchMessages();
 
-      // Set up polling every 2 seconds
-      const pollInterval = setInterval(fetchMessages, 2000);
+    // Set up polling every 2 seconds
+    const pollInterval = setInterval(fetchMessages, 2000);
 
-      return () => clearInterval(pollInterval);
-    }
+    return () => clearInterval(pollInterval);
   }, [selectedChat, connected]);
 
   // Update chat list fetching
   useEffect(() => {
-    if (connected) {
-      const fetchChats = async () => {
+    if (!connected) {
+      console.log("Not connected - clearing chats");
+      setChats([]);
+      return;
+    }
+
+    const fetchChats = async () => {
         try {
           console.log("Fetching chats...");
           const res = await axios.get<Record<string, ChatData | string>>("http://localhost:8000/api/mcp/chats");
@@ -956,14 +930,10 @@ const WhatsAppWebPage = () => {
       // Initial fetch
       fetchChats();
 
-      // Set up polling with a longer interval to avoid too many requests
-      const pollInterval = setInterval(fetchChats, 5000);
+    // Set up polling with a longer interval to avoid too many requests
+    const pollInterval = setInterval(fetchChats, 5000);
 
-      return () => clearInterval(pollInterval);
-    } else {
-      console.log("Not connected - clearing chats");
-      setChats([]);
-    }
+    return () => clearInterval(pollInterval);
   }, [connected, chatHistory]);
 
   // Filter chats to show only those with messages and matching search query

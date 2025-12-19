@@ -118,6 +118,12 @@ const ResultPage = () => {
           {isLoading ? <LoadingSpinner /> : "Ask"}
         </button>
 
+        {queryError && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
+            <p className="text-red-600 text-sm">{queryError}</p>
+          </div>
+        )}
+
         {response && (
           <div className="mt-4 bg-gray-50 p-4 border border-gray-200 rounded-md">
             <h3 className="font-semibold mb-2">Response:</h3>
